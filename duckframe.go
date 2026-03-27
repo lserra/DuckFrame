@@ -595,3 +595,77 @@ func setField(field reflect.Value, value interface{}) error {
 
 	return fmt.Errorf("cannot convert %T to %s", value, fieldType)
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4 — Data Formats (Read & Write)
+// ---------------------------------------------------------------------------
+
+// ReadParquet reads a Parquet file and returns a DataFrame.
+func ReadParquet(db *engine.DB, path string) (*DataFrame, error) {
+	tableName := nextTableName()
+	query := fmt.Sprintf("CREATE TEMPORARY TABLE %s AS SELECT * FROM read_parquet('%s')", tableName, path)
+
+	if _, err := db.Conn().Exec(query); err != nil {
+		return nil, fmt.Errorf("duckframe: failed to read Parquet %q: %w", path, err)
+	}
+
+	cols, err := queryColumns(db.Conn(), tableName)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DataFrame{db: db, tableName: tableName, columns: cols, owned: true}, nil
+}
+
+// ReadJSON reads a JSON Lines (newline-delimited JSON) file and returns a DataFrame.
+func ReadJSON(db *engine.DB, path string) (*DataFrame, error) {
+	tableName := nextTableName()
+	query := fmt.Sprintf("CREATE TEMPORARY TABLE %s AS SELECT * FROM read_json_auto('%s')", tableName, path)
+
+	if _, err := db.Conn().Exec(query); err != nil {
+		return nil, fmt.Errorf("duckframe: failed to read JSON %q: %w", path, err)
+	}
+
+	cols, err := queryColumns(db.Conn(), tableName)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DataFrame{db: db, tableName: tableName, columns: cols, owned: true}, nil
+}
+
+// WriteCSV writes the DataFrame contents to a CSV file.
+func (df *DataFrame) WriteCSV(path string) error {
+	if df.err != nil {
+		return df.err
+	}
+	query := fmt.Sprintf("COPY %s TO '%s' (FORMAT CSV, HEADER)", df.tableName, path)
+	if _, err := df.db.Conn().Exec(query); err != nil {
+		return fmt.Errorf("duckframe: failed to write CSV %q: %w", path, err)
+	}
+	return nil
+}
+
+// WriteParquet writes the DataFrame contents to a Parquet file.
+func (df *DataFrame) WriteParquet(path string) error {
+	if df.err != nil {
+		return df.err
+	}
+	query := fmt.Sprintf("COPY %s TO '%s' (FORMAT PARQUET)", df.tableName, path)
+	if _, err := df.db.Conn().Exec(query); err != nil {
+		return fmt.Errorf("duckframe: failed to write Parquet %q: %w", path, err)
+	}
+	return nil
+}
+
+// WriteJSON writes the DataFrame contents to a JSON Lines file.
+func (df *DataFrame) WriteJSON(path string) error {
+	if df.err != nil {
+		return df.err
+	}
+	query := fmt.Sprintf("COPY %s TO '%s' (FORMAT JSON)", df.tableName, path)
+	if _, err := df.db.Conn().Exec(query); err != nil {
+		return fmt.Errorf("duckframe: failed to write JSON %q: %w", path, err)
+	}
+	return nil
+}

@@ -341,4 +341,76 @@ if filtered.Err() != nil {
 
 ---
 
+### Formatos de Dados
+
+#### Leitura
+
+##### `duckframe.ReadCSV(db *engine.DB, path string) (*DataFrame, error)`
+
+Lê um arquivo CSV (detecção automática de tipos e delimitadores).
+
+```go
+df, err := duckframe.ReadCSV(db, "data/employees.csv")
+```
+
+##### `duckframe.ReadParquet(db *engine.DB, path string) (*DataFrame, error)`
+
+Lê um arquivo Parquet.
+
+```go
+df, err := duckframe.ReadParquet(db, "data/employees.parquet")
+```
+
+##### `duckframe.ReadJSON(db *engine.DB, path string) (*DataFrame, error)`
+
+Lê um arquivo JSON Lines (newline-delimited JSON).
+
+```go
+df, err := duckframe.ReadJSON(db, "data/employees.jsonl")
+```
+
+#### Escrita
+
+##### `(*DataFrame).WriteCSV(path string) error`
+
+Exporta o DataFrame para CSV.
+
+```go
+err := df.WriteCSV("output/result.csv")
+```
+
+##### `(*DataFrame).WriteParquet(path string) error`
+
+Exporta o DataFrame para Parquet.
+
+```go
+err := df.WriteParquet("output/result.parquet")
+```
+
+##### `(*DataFrame).WriteJSON(path string) error`
+
+Exporta o DataFrame para JSON.
+
+```go
+err := df.WriteJSON("output/result.json")
+```
+
+#### Pipeline ETL: CSV → Parquet
+
+```go
+db, _ := engine.Open("")
+defer db.Close()
+
+// Ler CSV, filtrar, salvar como Parquet
+df, _ := duckframe.ReadCSV(db, "raw_data.csv")
+defer df.Close()
+
+filtered, _ := df.Filter("salary > 80000")
+defer filtered.Close()
+
+filtered.WriteParquet("high_salary.parquet")
+```
+
+---
+
 > **Nota:** Este guia será expandido à medida que novas funcionalidades forem implementadas.

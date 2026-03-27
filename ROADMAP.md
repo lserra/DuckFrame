@@ -38,13 +38,13 @@
 - [x] Tratamento de erros consistente (error wrapping + `Err()`)
 
 ## Fase 4 — Formatos de Dados
-- [ ] `ReadParquet(path string) *DataFrame`
-- [ ] `ReadJSON(path string) *DataFrame` (JSON Lines)
-- [ ] `ReadArrow(path string) *DataFrame` (Arrow IPC)
-- [ ] `WriteCSV(path string) error`
-- [ ] `WriteParquet(path string) error`
-- [ ] `WriteJSON(path string) error`
-- [ ] Testes para leitura/escrita de cada formato
+- [x] `ReadParquet(path string) *DataFrame`
+- [x] `ReadJSON(path string) *DataFrame` (JSON Lines)
+- [ ] `ReadArrow(path string) *DataFrame` (Arrow IPC) — adiado
+- [x] `WriteCSV(path string) error`
+- [x] `WriteParquet(path string) error`
+- [x] `WriteJSON(path string) error`
+- [x] Testes para leitura/escrita de cada formato
 
 ## Fase 5 — Operações Avançadas
 - [ ] `Sort(col string, asc bool) *DataFrame`

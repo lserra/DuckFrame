@@ -867,3 +867,251 @@ func TestFluentChainToSlice(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4 — Data Formats Tests
+// ---------------------------------------------------------------------------
+
+func TestWriteCSVAndRead(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	// Write to temp CSV
+	tmpFile := filepath.Join(t.TempDir(), "output.csv")
+	err = df.WriteCSV(tmpFile)
+	if err != nil {
+		t.Fatalf("WriteCSV failed: %v", err)
+	}
+
+	// Read it back
+	df2, err := duckframe.ReadCSV(db, tmpFile)
+	if err != nil {
+		t.Fatalf("failed to re-read CSV: %v", err)
+	}
+	defer df2.Close()
+
+	r, c, err := df2.Shape()
+	if err != nil {
+		t.Fatalf("failed to get shape: %v", err)
+	}
+	if r != 7 || c != 4 {
+		t.Fatalf("expected (7, 4), got (%d, %d)", r, c)
+	}
+}
+
+func TestWriteParquetAndRead(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	// Write to Parquet
+	tmpFile := filepath.Join(t.TempDir(), "output.parquet")
+	err = df.WriteParquet(tmpFile)
+	if err != nil {
+		t.Fatalf("WriteParquet failed: %v", err)
+	}
+
+	// Read it back
+	df2, err := duckframe.ReadParquet(db, tmpFile)
+	if err != nil {
+		t.Fatalf("failed to ReadParquet: %v", err)
+	}
+	defer df2.Close()
+
+	r, c, err := df2.Shape()
+	if err != nil {
+		t.Fatalf("failed to get shape: %v", err)
+	}
+	if r != 7 || c != 4 {
+		t.Fatalf("expected (7, 4), got (%d, %d)", r, c)
+	}
+
+	// Verify columns match
+	cols := df2.Columns()
+	expected := []string{"name", "age", "country", "salary"}
+	for i, col := range expected {
+		if cols[i] != col {
+			t.Fatalf("column %d: expected %q, got %q", i, col, cols[i])
+		}
+	}
+}
+
+func TestWriteJSONAndRead(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	// Write to JSON
+	tmpFile := filepath.Join(t.TempDir(), "output.json")
+	err = df.WriteJSON(tmpFile)
+	if err != nil {
+		t.Fatalf("WriteJSON failed: %v", err)
+	}
+
+	// Read it back
+	df2, err := duckframe.ReadJSON(db, tmpFile)
+	if err != nil {
+		t.Fatalf("failed to ReadJSON: %v", err)
+	}
+	defer df2.Close()
+
+	r, _, err := df2.Shape()
+	if err != nil {
+		t.Fatalf("failed to get shape: %v", err)
+	}
+	if r != 7 {
+		t.Fatalf("expected 7 rows, got %d", r)
+	}
+}
+
+func TestReadJSONLines(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadJSON(db, testdataPath("employees.jsonl"))
+	if err != nil {
+		t.Fatalf("failed to ReadJSON: %v", err)
+	}
+	defer df.Close()
+
+	r, c, err := df.Shape()
+	if err != nil {
+		t.Fatalf("failed to get shape: %v", err)
+	}
+	if r != 5 {
+		t.Fatalf("expected 5 rows, got %d", r)
+	}
+	if c != 4 {
+		t.Fatalf("expected 4 columns, got %d", c)
+	}
+}
+
+func TestReadParquetNotFound(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	_, err := duckframe.ReadParquet(db, "/nonexistent/file.parquet")
+	if err == nil {
+		t.Fatal("expected error for non-existent Parquet file")
+	}
+}
+
+func TestReadJSONNotFound(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	_, err := duckframe.ReadJSON(db, "/nonexistent/file.json")
+	if err == nil {
+		t.Fatal("expected error for non-existent JSON file")
+	}
+}
+
+func TestCSVToParquetPipeline(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	// Read CSV -> Filter -> Write Parquet -> Read Parquet -> Verify
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	filtered, err := df.Filter("salary > 80000")
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	defer filtered.Close()
+
+	tmpFile := filepath.Join(t.TempDir(), "high_salary.parquet")
+	err = filtered.WriteParquet(tmpFile)
+	if err != nil {
+		t.Fatalf("WriteParquet failed: %v", err)
+	}
+
+	result, err := duckframe.ReadParquet(db, tmpFile)
+	if err != nil {
+		t.Fatalf("ReadParquet failed: %v", err)
+	}
+	defer result.Close()
+
+	r, _, err := result.Shape()
+	if err != nil {
+		t.Fatalf("failed to get shape: %v", err)
+	}
+	// Alice(85k), Carol(95k), Eve(91k), Frank(102k) = 4
+	if r != 4 {
+		t.Fatalf("expected 4 high salary employees, got %d", r)
+	}
+
+	var employees []Employee
+	err = result.ToSlice(&employees)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+
+	for _, emp := range employees {
+		if emp.Salary <= 80000 {
+			t.Fatalf("expected salary > 80000, got %.2f for %s", emp.Salary, emp.Name)
+		}
+	}
+}
+
+func TestWriteCSVErrorOnBadDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	// Force error on df
+	badDf, _ := df.Filter("INVALID!!!")
+	err := badDf.WriteCSV("/tmp/test.csv")
+	if err == nil {
+		t.Fatal("expected error on WriteCSV with error DataFrame")
+	}
+}
+
+func TestWriteParquetErrorOnBadDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDf, _ := df.Filter("INVALID!!!")
+	err := badDf.WriteParquet("/tmp/test.parquet")
+	if err == nil {
+		t.Fatal("expected error on WriteParquet with error DataFrame")
+	}
+}
+
+func TestWriteJSONErrorOnBadDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDf, _ := df.Filter("INVALID!!!")
+	err := badDf.WriteJSON("/tmp/test.json")
+	if err == nil {
+		t.Fatal("expected error on WriteJSON with error DataFrame")
+	}
+}
