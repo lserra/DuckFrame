@@ -86,14 +86,14 @@
 - [ ] Godoc publicado
 
 ## Fase 9 — Documentação e Exemplos
-- [ ] README.md com badges, instalação, quickstart
-- [ ] Pasta `examples/` com casos de uso reais
-  - [ ] ETL básico (CSV → Parquet)
-  - [ ] Análise exploratória
-  - [ ] Pipeline concorrente
-  - [ ] Integração com API HTTP
-- [ ] Documentação de API (wiki ou site estático)
-- [ ] CONTRIBUTING.md
+- [x] README.md com badges, instalação, quickstart, API overview, tabela de status
+- [x] Pasta `examples/` com casos de uso reais
+  - [x] ETL básico (CSV → Parquet) — `examples/etl/`
+  - [x] Análise exploratória — `examples/analysis/`
+  - [x] Pipeline concorrente — `examples/concurrent/`
+  - [x] Integração com API HTTP — `examples/http-api/`
+- [x] Documentação de API — `docs/API.md` + `USER_GUIDE.md`
+- [x] CONTRIBUTING.md
 
 ## Fase 10 — Benchmarks e Lançamento
 - [ ] Benchmark: DuckFrame vs Pandas (Python) em operações comuns

@@ -12,6 +12,8 @@
 4. [Uso Básico](#uso-básico)
 5. [Desenvolvimento](#desenvolvimento)
 6. [API Reference](#api-reference)
+7. [Exemplos](#exemplos)
+8. [Qualidade e Ferramentas](#qualidade-e-ferramentas)
 
 ---
 
@@ -34,18 +36,29 @@ go get github.com/lserra/duckframe
 ```
 duckframe/
 ├── duckframe.go              # Struct DataFrame + API principal
-├── duckframe_test.go          # Testes do DataFrame
+├── duckframe_test.go         # Testes do DataFrame
+├── duckframe_bench_test.go   # Benchmarks
+├── example_test.go           # Exemplos para godoc
 ├── internal/
 │   └── engine/
-│       ├── engine.go          # Gerenciamento de conexão DuckDB
-│       └── engine_test.go     # Testes da engine
-├── examples/                  # Exemplos de uso
-├── testdata/                  # Dados para testes
-├── Makefile                   # Comandos de build/test/lint
+│       ├── engine.go         # Gerenciamento de conexão DuckDB
+│       └── engine_test.go    # Testes da engine
+├── examples/                 # Exemplos executáveis
+│   ├── basic/                # Operações fundamentais
+│   ├── etl/                  # Pipeline CSV → Parquet
+│   ├── analysis/             # Análise exploratória
+│   ├── concurrent/           # Processamento paralelo
+│   └── http-api/             # REST API com JSON
+├── docs/
+│   └── API.md                # Referência completa da API
+├── testdata/                 # Dados para testes
+├── Makefile                  # Comandos de build/test/lint
+├── .golangci.yml             # Configuração do linter
 ├── .github/workflows/ci.yml  # CI com GitHub Actions
-├── LICENSE                    # MIT
-├── ROADMAP.md                 # Roadmap do projeto
-└── USER_GUIDE.md              # Este guia
+├── LICENSE                   # MIT
+├── ROADMAP.md                # Roadmap do projeto
+├── USER_GUIDE.md             # Este guia
+└── CONTRIBUTING.md           # Guia de contribuição
 ```
 
 ## Uso Básico
@@ -707,6 +720,39 @@ grouped.Show()
 | DATE | DATE |
 | TIMESTAMP/DATETIME | TIMESTAMP |
 | TIME | TIME |
+
+---
+
+### Exemplos
+
+A pasta `examples/` contém programas completos e executáveis:
+
+| Exemplo | Diretório | Descrição |
+|---|---|---|
+| **Basic** | `examples/basic/` | Operações fundamentais: leitura CSV, filtro, seleção, agrupamento, SQL |
+| **ETL** | `examples/etl/` | Pipeline CSV → filtro → cálculo de bonus → Parquet |
+| **Analysis** | `examples/analysis/` | Análise exploratória: shape, tipos, describe, top-N, SQL customizado |
+| **Concurrent** | `examples/concurrent/` | ParallelApply, ReadCSVChunked, operações com context |
+| **HTTP API** | `examples/http-api/` | REST API com endpoints JSON servindo dados do DataFrame |
+
+#### Como executar um exemplo
+
+```bash
+cd examples/etl
+CGO_ENABLED=1 go run main.go
+```
+
+Para o exemplo HTTP API:
+
+```bash
+cd examples/http-api
+CGO_ENABLED=1 go run main.go
+# Em outro terminal:
+curl http://localhost:8080/employees
+curl http://localhost:8080/employees?country=Brazil
+curl http://localhost:8080/stats
+curl http://localhost:8080/top?n=3
+```
 
 ---
 

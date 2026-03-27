@@ -1,142 +1,240 @@
-# OBJETIVO
+# DuckFrame 🦆
 
-Criar uma biblioteca open‑source em Go que ofereça uma experiência semelhante ao Pandas, mas usando o DuckDB como motor de execução.
+[![CI](https://github.com/lserra/duckframe/actions/workflows/ci.yml/badge.svg)](https://github.com/lserra/duckframe/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/lserra/duckframe.svg)](https://pkg.go.dev/github.com/lserra/duckframe)
+[![Go Report Card](https://goreportcard.com/badge/github.com/lserra/duckframe)](https://goreportcard.com/report/github.com/lserra/duckframe)
+[![Coverage](https://img.shields.io/badge/coverage-80.6%25-brightgreen)](https://github.com/lserra/duckframe)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## MOTIVAÇÃO
+**A Pandas-like DataFrame library for Go, powered by DuckDB.**
 
-O DuckDB já provou ser um “SQLite para analytics”: rápido, embutido, vetorizado, com suporte a colunas, e extremamente eficiente para workloads analíticos. Ele resolve um dos maiores desafios de quem tenta criar um dataframe do zero: um motor de execução otimizado.
-Ao usar o DuckDB como backend podemos:
-
-* Herdar toda a performance do engine vetorizado.
-* Ganhar paralelismo automático.
-* Evitar reinventar parsing, otimização de queries, operadores, etc.
-* Oferecer ao usuário uma API simples, enquanto o DuckDB faz o trabalho pesado.
-
-O Pandas não tinha no início — e por isso hoje existe Polars, que usa Apache Arrow e Rust para resolver limitações de performance. A minha proposta é algo nessa linha, mas para Go.
-
-## TRANSFORMAÇÃO
-
-Quero poder transformar o uso de Go em Data Engineering / Data Science
-Go é amado por:
-
-* Simplicidade
-* Performance
-* Concurrency
-* Deploy fácil
-* Binários estáticos
-* Ecossistema maduro para backend e infra
-
-Mas, eu percebi que Go ainda não tem uma biblioteca de dataframes realmente dominante. Isso cria uma barreira enorme para cientistas de dados e engenheiros que gostariam de usar Go além de pipelines e serviços.
-
-Então, a minha proposta é entregar:
-
-* Uma API simples
-* Uma experiência parecida com Pandas
-* Performance de DuckDB
-* Integração com Arrow, Parquet, CSV, JSON, SQL
-
-E com isso, eu quero abrir a porta para que Go seja usado em:
-
-* ETL/ELT
-* Feature engineering
-* Prototipação de modelos
-* Data exploration
-* Machine learning pipelines
-* Data apps embarcados
-
-Acredito que isso será um divisor de águas.
-
-## SUGESTÕES PRÁTICAS
-
-Sugestões práticas para o design da biblioteca:
-
-*1.* Uma API familiar, inspirada no Pandas/Polars, algo como:
+DuckFrame brings the familiar DataFrame experience to Go, using [DuckDB](https://duckdb.org/) as the execution engine. Get the simplicity of Pandas with the performance of a vectorized columnar database — all in a single binary, no Python required.
 
 ```go
-df := goframe.ReadCSV("data.csv")
+db, _ := engine.Open("")
+defer db.Close()
 
-df = df.Filter("age > 30").
-        GroupBy("country").
-        Agg("salary", "mean")
+df, _ := duckframe.ReadCSV(db, "employees.csv")
+defer df.Close()
 
-df.Show()
-````
+result, _ := df.Filter("age > 30").
+    GroupBy("country").
+    Agg("salary", "mean")
 
-Ou até:
-
-```go
-df.Sql("SELECT country, AVG(salary) FROM df GROUP BY country")
+result.Show()
+// DataFrame [3 rows x 2 cols]
+// country    mean(salary)
+// ---------  ------------
+// Brazil     94000.41
+// Germany    82500.37
+// USA        70000.00
 ```
 
-A familiaridade reduz a curva de aprendizado.
+---
 
-*2.* Internamente, tudo vira DuckDB, o dataframe pode ser:
+## Features
 
-* Uma tabela temporária no DuckDB
-* Um view
-* Um arquivo Arrow/Parquet mapeado
+- **Pandas-like API** — `Filter`, `Select`, `GroupBy`, `Agg`, `Sort`, `Join`, `Union`, `Describe`...
+- **DuckDB-powered** — vectorized execution, automatic parallelism, zero-copy Parquet/CSV reads
+- **Multi-format** — CSV, Parquet, JSON Lines (read & write)
+- **External connectors** — SQLite, PostgreSQL, MySQL, any `database/sql` driver
+- **Concurrency** — `ParallelApply`, `ReadCSVChunked`, context-aware operations
+- **SQL escape hatch** — `df.Sql("SELECT ... FROM {df} WHERE ...")`
+- **Type-safe materialization** — `ToSlice(&[]MyStruct{})` with struct tag mapping
+- **Fluent error handling** — chain operations safely, check errors at the end
+- **Single binary** — no runtime dependencies, CGO for DuckDB only
 
-Isso dará flexibilidade e performance.
+## Installation
 
-*3.* Suporte nativo a formatos modernos:
+```bash
+go get github.com/lserra/duckframe
+```
 
-* CSV
-* Parquet
-* Arrow IPC
-* JSON Lines
-* SQLite
-* Postgres/MySQL connectors (opcional)
+> **Requirement:** CGO must be enabled (`CGO_ENABLED=1`) and a C compiler available (gcc/clang).
+>
+> - macOS: `xcode-select --install`
+> - Ubuntu/Debian: `sudo apt install build-essential`
 
-*4.* Integração com Go routines, será um diferencial que Pandas não tem:
+## Quick Start
 
-* Operações paralelas
-* Pipelines concorrentes
-* Streaming de dados
-Go brilha aqui.
+```go
+package main
 
-*5.* Uma camada de abstração que esconda SQL quando o usuário quiser, mas permita SQL quando ele quiser também.
+import (
+    "fmt"
+    "log"
 
-*6.* Documentação impecável e exemplos reais, isso é o que fez o Pandas explodir.
+    "github.com/lserra/duckframe"
+    "github.com/lserra/duckframe/internal/engine"
+)
 
-*7.* Benchmarks contra Pandas e Polars, nada atrai mais atenção do que:
+func main() {
+    // Open in-memory DuckDB
+    db, err := engine.Open("")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
 
-* “10x mais rápido que Pandas”
-* “Tão rápido quanto Polars, mas em Go”
-* “Integração nativa com serviços Go”
+    // Read CSV
+    df, err := duckframe.ReadCSV(db, "data/employees.csv")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer df.Close()
 
-## MVP
+    // Explore
+    df.Show()
 
-Primeiro MVP:
+    r, c, _ := df.Shape()
+    fmt.Printf("Rows: %d, Cols: %d\n", r, c)
 
-* ReadCSV
-* Select
-* Filter
-* GroupBy
-* Agg
-* Show
+    // Filter + Select
+    result, _ := df.Filter("salary > 80000")
+    defer result.Close()
 
-Depois expandir para outras funcionalidades.
+    selected, _ := result.Select("name", "country", "salary")
+    defer selected.Close()
+    selected.Show()
 
-## NOME DA BIBLIOTECA
+    // GroupBy + Agg
+    grouped, _ := df.GroupBy("country").Agg("salary", "mean")
+    defer grouped.Close()
+    grouped.Show()
 
-* duckframe (alias, df)
+    // Raw SQL
+    top, _ := df.Sql("SELECT name, salary FROM {df} ORDER BY salary DESC LIMIT 3")
+    defer top.Close()
+    top.Show()
 
-## COMUNIDADE
+    // Materialize to structs
+    type Employee struct {
+        Name   string  `df:"name"`
+        Salary float64 `df:"salary"`
+    }
+    var emps []Employee
+    df.ToSlice(&emps)
+    for _, e := range emps {
+        fmt.Printf("%s: $%.0f\n", e.Name, e.Salary)
+    }
+}
+```
 
-Será construída uma comunidade desde o início:
+## API Overview
 
-* Discord/Slack
-* Roadmap público
-* Issues bem organizadas
-* Exemplos reais
-* Benchmarks
+### Creating DataFrames
 
-## IMPORTANTE
+| Function | Description |
+|---|---|
+| `New(db, columns, rows)` | From Go data (maps) |
+| `FromQuery(db, sql)` | From any SQL query |
+| `ReadCSV(db, path)` | Read CSV file |
+| `ReadParquet(db, path)` | Read Parquet file |
+| `ReadJSON(db, path)` | Read JSON Lines file |
+| `ReadSQLite(db, path, table)` | Read from SQLite |
+| `ReadPostgres(db, dsn, query)` | Read from PostgreSQL |
+| `ReadMySQL(db, dsn, query)` | Read from MySQL |
+| `ReadFromDB(db, extDB, query)` | Read from any `database/sql` |
 
-Fazer integração com o ecossistema Go:
+### Operations
 
-* go generate
-* go test
-* go vet
-* go doc
-* go mod tidy
+| Method | Description |
+|---|---|
+| `Select(cols...)` | Select columns |
+| `Filter(expr)` | Filter rows with SQL expression |
+| `Sort(col, asc)` | Sort by column |
+| `Limit(n)` | First n rows |
+| `Distinct()` | Remove duplicates |
+| `GroupBy(cols...).Agg(col, fn)` | Aggregate (mean, sum, count, min, max) |
+| `Join(other, on, how)` | Join (inner, left, right, full) |
+| `Union(other)` | Combine DataFrames |
+| `Rename(old, new)` | Rename column |
+| `Drop(cols...)` | Drop columns |
+| `WithColumn(name, expr)` | Add/replace computed column |
+| `Head(n)` / `Tail(n)` | First/last n rows |
+| `Sql(query)` | Raw SQL with `{df}` placeholder |
+
+### Inspection
+
+| Method | Description |
+|---|---|
+| `Show(maxRows...)` | Print formatted table |
+| `Shape()` | (rows, cols) |
+| `Columns()` | Column names |
+| `Dtypes()` | Column types |
+| `Describe()` | Descriptive statistics |
+
+### Materialization
+
+| Method | Description |
+|---|---|
+| `Collect()` | To `[]map[string]interface{}` |
+| `ToSlice(&dest)` | To slice of structs (via `df` tags) |
+| `WriteCSV(path)` | Export to CSV |
+| `WriteParquet(path)` | Export to Parquet |
+| `WriteJSON(path)` | Export to JSON |
+
+### Concurrency
+
+| Function/Method | Description |
+|---|---|
+| `ParallelApply(dfs, fn)` | Apply function to multiple DFs in parallel |
+| `ReadCSVChunked(ctx, db, path, size)` | Stream CSV in chunks |
+| `FilterContext(ctx, expr)` | Context-aware filter |
+| `SortContext(ctx, col, asc)` | Context-aware sort |
+| `FromQueryContext(ctx, db, sql)` | Context-aware query |
+| `ReadCSVContext(ctx, db, path)` | Context-aware CSV read |
+
+## Examples
+
+See the [`examples/`](examples/) directory for complete, runnable examples:
+
+| Example | Description |
+|---|---|
+| [`basic`](examples/basic/) | Core operations: read, filter, select, group, SQL |
+| [`etl`](examples/etl/) | CSV → filter → Parquet pipeline |
+| [`analysis`](examples/analysis/) | Exploratory data analysis |
+| [`concurrent`](examples/concurrent/) | Parallel processing & chunked reading |
+| [`http-api`](examples/http-api/) | REST API serving DataFrame queries |
+
+## Development
+
+```bash
+make build      # Build
+make test       # Run tests
+make coverage   # Coverage report
+make lint       # golangci-lint
+make vet        # go vet
+make fmt        # Format code
+make all        # All of the above
+```
+
+## Project Status
+
+| Phase | Status |
+|---|---|
+| 0 — Setup | ✅ |
+| 1 — Core | ✅ |
+| 2 — MVP | ✅ |
+| 3 — Fluent API | ✅ |
+| 4 — Data Formats | ✅ |
+| 5 — Advanced Operations | ✅ |
+| 6 — Concurrency & Streaming | ✅ |
+| 7 — External Connectors | ✅ |
+| 8 — Quality & Tooling | ✅ |
+| 9 — Docs & Examples | ✅ |
+| 10 — Benchmarks & Launch | ⬜ |
+
+See [ROADMAP.md](ROADMAP.md) for the detailed plan.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
+
+---
+
+> **DuckFrame** — DataFrames for Go. Powered by DuckDB. Built for engineers.
