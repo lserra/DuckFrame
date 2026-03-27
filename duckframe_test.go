@@ -541,3 +541,329 @@ func TestChainedOperations(t *testing.T) {
 		t.Fatalf("expected 2 columns, got %d", c)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 — Collect, ToSlice, Fluent API Tests
+// ---------------------------------------------------------------------------
+
+func TestCollect(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	rows, err := df.Collect()
+	if err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	if len(rows) != 7 {
+		t.Fatalf("expected 7 rows, got %d", len(rows))
+	}
+
+	// Check first row has expected keys
+	first := rows[0]
+	for _, key := range []string{"name", "age", "country", "salary"} {
+		if _, ok := first[key]; !ok {
+			t.Fatalf("expected key %q in row, got %v", key, first)
+		}
+	}
+}
+
+func TestCollectEmpty(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.New(db, []string{"a", "b"}, nil)
+	if err != nil {
+		t.Fatalf("failed to create DataFrame: %v", err)
+	}
+	defer df.Close()
+
+	rows, err := df.Collect()
+	if err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	if len(rows) != 0 {
+		t.Fatalf("expected 0 rows, got %d", len(rows))
+	}
+}
+
+func TestCollectAfterFilter(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	filtered, err := df.Filter("country = 'Brazil'")
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	defer filtered.Close()
+
+	rows, err := filtered.Collect()
+	if err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows for Brazil, got %d", len(rows))
+	}
+}
+
+type Employee struct {
+	Name    string  `df:"name"`
+	Age     int64   `df:"age"`
+	Country string  `df:"country"`
+	Salary  float64 `df:"salary"`
+}
+
+func TestToSlice(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	var employees []Employee
+	err = df.ToSlice(&employees)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+
+	if len(employees) != 7 {
+		t.Fatalf("expected 7 employees, got %d", len(employees))
+	}
+
+	// Check first employee
+	if employees[0].Name == "" {
+		t.Fatal("expected non-empty name")
+	}
+	if employees[0].Age == 0 {
+		t.Fatal("expected non-zero age")
+	}
+	if employees[0].Country == "" {
+		t.Fatal("expected non-empty country")
+	}
+	if employees[0].Salary == 0 {
+		t.Fatal("expected non-zero salary")
+	}
+}
+
+func TestToSliceFiltered(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	filtered, err := df.Filter("age > 30")
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	defer filtered.Close()
+
+	var employees []Employee
+	err = filtered.ToSlice(&employees)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+
+	if len(employees) != 3 {
+		t.Fatalf("expected 3 employees with age > 30, got %d", len(employees))
+	}
+
+	for _, emp := range employees {
+		if emp.Age <= 30 {
+			t.Fatalf("expected age > 30, got %d for %s", emp.Age, emp.Name)
+		}
+	}
+}
+
+type PartialEmployee struct {
+	Name   string  `df:"name"`
+	Salary float64 `df:"salary"`
+}
+
+func TestToSlicePartialStruct(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	// ToSlice with a struct that has fewer fields than columns
+	var employees []PartialEmployee
+	err = df.ToSlice(&employees)
+	if err != nil {
+		t.Fatalf("ToSlice with partial struct failed: %v", err)
+	}
+
+	if len(employees) != 7 {
+		t.Fatalf("expected 7 employees, got %d", len(employees))
+	}
+
+	if employees[0].Name == "" || employees[0].Salary == 0 {
+		t.Fatal("expected non-empty partial fields")
+	}
+}
+
+func TestToSliceInvalidDest(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.New(db, []string{"a"}, nil)
+	if err != nil {
+		t.Fatalf("failed to create DataFrame: %v", err)
+	}
+	defer df.Close()
+
+	// Not a pointer
+	var s []Employee
+	err = df.ToSlice(s)
+	if err == nil {
+		t.Fatal("expected error for non-pointer dest")
+	}
+
+	// Pointer to non-slice
+	var x int
+	err = df.ToSlice(&x)
+	if err == nil {
+		t.Fatal("expected error for pointer to non-slice")
+	}
+}
+
+func TestErrorPropagation(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	// Force an error by filtering with invalid expression
+	badDf, _ := df.Filter("INVALID SYNTAX !!!")
+
+	// Error should propagate through chained operations
+	if badDf.Err() == nil {
+		t.Fatal("expected error on bad filter")
+	}
+
+	// Collect on error DataFrame should return error
+	_, err = badDf.Collect()
+	if err == nil {
+		t.Fatal("expected error on Collect after bad filter")
+	}
+
+	// Show on error DataFrame should return error
+	err = badDf.Show()
+	if err == nil {
+		t.Fatal("expected error on Show after bad filter")
+	}
+
+	// Shape on error DataFrame should return error
+	_, _, err = badDf.Shape()
+	if err == nil {
+		t.Fatal("expected error on Shape after bad filter")
+	}
+}
+
+func TestFluentChain(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	// Chain: Filter -> Select -> Collect
+	filtered, err := df.Filter("age > 28")
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	defer filtered.Close()
+
+	selected, err := filtered.Select("name", "salary")
+	if err != nil {
+		t.Fatalf("Select failed: %v", err)
+	}
+	defer selected.Close()
+
+	rows, err := selected.Collect()
+	if err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	// Alice(30), Carol(35), Eve(32), Frank(40) = 4
+	if len(rows) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(rows))
+	}
+
+	// Should have only name and salary columns
+	for _, row := range rows {
+		if _, ok := row["name"]; !ok {
+			t.Fatal("expected name column in result")
+		}
+		if _, ok := row["salary"]; !ok {
+			t.Fatal("expected salary column in result")
+		}
+		if _, ok := row["age"]; ok {
+			t.Fatal("unexpected age column in result")
+		}
+	}
+}
+
+func TestFluentChainToSlice(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("failed to ReadCSV: %v", err)
+	}
+	defer df.Close()
+
+	filtered, err := df.Filter("country = 'Germany'")
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	defer filtered.Close()
+
+	var employees []Employee
+	err = filtered.ToSlice(&employees)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+
+	if len(employees) != 2 {
+		t.Fatalf("expected 2 German employees, got %d", len(employees))
+	}
+
+	for _, emp := range employees {
+		if emp.Country != "Germany" {
+			t.Fatalf("expected country Germany, got %s", emp.Country)
+		}
+	}
+}

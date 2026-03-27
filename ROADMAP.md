@@ -31,11 +31,11 @@
 - [x] Exemplo funcional end-to-end com CSV real
 
 ## Fase 3 — API Fluente e Encadeamento
-- [ ] Garantir encadeamento de operações (`df.Filter(...).Select(...).Show()`)
-- [ ] Implementar lazy evaluation (montar query, executar só no `Show`/`Collect`)
-- [ ] `Collect() []map[string]interface{}` — materializar resultado em Go
-- [ ] `ToSlice(dest interface{})` — materializar em slice de structs
-- [ ] Tratamento de erros consistente (error wrapping)
+- [x] Garantir encadeamento de operações (`df.Filter(...).Select(...).Show()`)
+- [x] Implementar propagação de erros em cadeia (error-safe chaining)
+- [x] `Collect() []map[string]interface{}` — materializar resultado em Go
+- [x] `ToSlice(dest interface{})` — materializar em slice de structs
+- [x] Tratamento de erros consistente (error wrapping + `Err()`)
 
 ## Fase 4 — Formatos de Dados
 - [ ] `ReadParquet(path string) *DataFrame`

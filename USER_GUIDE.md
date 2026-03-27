@@ -287,4 +287,58 @@ defer result.Close()
 
 ---
 
+### Materialização de Dados
+
+#### `(*DataFrame).Collect() ([]map[string]interface{}, error)`
+
+Materializa o DataFrame inteiro em uma slice de maps (cada map é uma linha).
+
+```go
+rows, err := df.Collect()
+for _, row := range rows {
+    fmt.Printf("%s: %.2f\n", row["name"], row["salary"])
+}
+```
+
+#### `(*DataFrame).ToSlice(dest interface{}) error`
+
+Materializa o DataFrame em uma slice de structs. Os campos são mapeados pela tag `df`, ou pelo nome do campo (case-insensitive).
+
+```go
+type Employee struct {
+    Name    string  `df:"name"`
+    Age     int64   `df:"age"`
+    Country string  `df:"country"`
+    Salary  float64 `df:"salary"`
+}
+
+var employees []Employee
+err := df.ToSlice(&employees)
+for _, emp := range employees {
+    fmt.Printf("%s (%d) - $%.2f\n", emp.Name, emp.Age, emp.Salary)
+}
+```
+
+### Tratamento de Erros
+
+#### `(*DataFrame).Err() error`
+
+Retorna o erro armazenado no DataFrame (para encadeamento fluente).
+
+Todos os métodos propagam erros automaticamente — se une operação falha, as operações seguintes também retornam erro sem executar:
+
+```go
+// Se Filter falha, Select e Collect também retornam o erro
+filtered, _ := df.Filter("INVALID")
+selected, _ := filtered.Select("name")
+rows, err := selected.Collect()  // err contém o erro original do Filter
+
+// Ou verifique com Err()
+if filtered.Err() != nil {
+    log.Fatal(filtered.Err())
+}
+```
+
+---
+
 > **Nota:** Este guia será expandido à medida que novas funcionalidades forem implementadas.

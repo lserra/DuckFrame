@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"text/tabwriter"
@@ -26,7 +27,19 @@ type DataFrame struct {
 	db        *engine.DB
 	tableName string
 	columns   []string
-	owned     bool // whether this DataFrame owns (and should drop) its table
+	owned     bool  // whether this DataFrame owns (and should drop) its table
+	err       error // carries error for fluent chaining
+}
+
+// Err returns the error stored in the DataFrame, if any.
+// Use this after a chain of operations to check for errors.
+func (df *DataFrame) Err() error {
+	return df.err
+}
+
+// errDF creates a DataFrame that carries an error (for fluent chaining).
+func errDF(db *engine.DB, err error) *DataFrame {
+	return &DataFrame{db: db, err: err}
 }
 
 // New creates a new DataFrame from column names and row data.
@@ -145,6 +158,9 @@ func (df *DataFrame) Engine() *engine.DB {
 
 // Close drops the underlying temporary table if this DataFrame owns it.
 func (df *DataFrame) Close() error {
+	if df.err != nil {
+		return nil // nothing to close on an error DataFrame
+	}
 	if df.owned && df.tableName != "" {
 		_, err := df.db.Conn().Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", df.tableName))
 		df.tableName = ""
@@ -155,6 +171,9 @@ func (df *DataFrame) Close() error {
 
 // Shape returns the number of rows and columns in the DataFrame.
 func (df *DataFrame) Shape() (rows int, cols int, err error) {
+	if df.err != nil {
+		return 0, 0, df.err
+	}
 	var count int
 	err = df.db.Conn().QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", df.tableName)).Scan(&count)
 	if err != nil {
@@ -220,6 +239,9 @@ func ReadCSV(db *engine.DB, path string) (*DataFrame, error) {
 
 // Select returns a new DataFrame with only the specified columns.
 func (df *DataFrame) Select(cols ...string) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
 	if len(cols) == 0 {
 		return nil, fmt.Errorf("duckframe: Select requires at least one column")
 	}
@@ -235,8 +257,15 @@ func (df *DataFrame) Select(cols ...string) (*DataFrame, error) {
 
 // Filter returns a new DataFrame with rows matching the given SQL expression.
 func (df *DataFrame) Filter(expr string) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
 	query := fmt.Sprintf("SELECT * FROM %s WHERE %s", df.tableName, expr)
-	return FromQuery(df.db, query)
+	result, err := FromQuery(df.db, query)
+	if err != nil {
+		return errDF(df.db, err), err
+	}
+	return result, nil
 }
 
 // GroupedFrame represents a DataFrame grouped by one or more columns.
@@ -256,6 +285,9 @@ func (df *DataFrame) GroupBy(cols ...string) *GroupedFrame {
 // Agg performs an aggregation on the grouped DataFrame.
 // fn can be: "mean"/"avg", "sum", "count", "min", "max".
 func (gf *GroupedFrame) Agg(col string, fn string) (*DataFrame, error) {
+	if gf.df.err != nil {
+		return errDF(gf.df.db, gf.df.err), gf.df.err
+	}
 	sqlFn := strings.ToUpper(fn)
 	if sqlFn == "MEAN" {
 		sqlFn = "AVG"
@@ -284,6 +316,9 @@ func (gf *GroupedFrame) Agg(col string, fn string) (*DataFrame, error) {
 // Show prints the DataFrame contents as a formatted table to stdout.
 // It displays up to maxRows rows (0 = all rows).
 func (df *DataFrame) Show(maxRows ...int) error {
+	if df.err != nil {
+		return df.err
+	}
 	limit := 50
 	if len(maxRows) > 0 && maxRows[0] > 0 {
 		limit = maxRows[0]
@@ -351,6 +386,212 @@ func (df *DataFrame) Show(maxRows ...int) error {
 // Sql executes a raw SQL query and returns the result as a new DataFrame.
 // Use the placeholder "{df}" in the query to reference this DataFrame's table.
 func (df *DataFrame) Sql(query string) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
 	resolved := strings.ReplaceAll(query, "{df}", df.tableName)
 	return FromQuery(df.db, resolved)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 — Collect, ToSlice, Fluent API
+// ---------------------------------------------------------------------------
+
+// Collect materializes the DataFrame into a slice of maps.
+// Each map represents a row with column names as keys.
+func (df *DataFrame) Collect() ([]map[string]interface{}, error) {
+	if df.err != nil {
+		return nil, df.err
+	}
+
+	query := fmt.Sprintf("SELECT * FROM %s", df.tableName)
+	rows, err := df.db.Conn().Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("duckframe: Collect query failed: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("duckframe: Collect failed to get columns: %w", err)
+	}
+
+	var result []map[string]interface{}
+	values := make([]interface{}, len(cols))
+	ptrs := make([]interface{}, len(cols))
+	for i := range values {
+		ptrs[i] = &values[i]
+	}
+
+	for rows.Next() {
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, fmt.Errorf("duckframe: Collect failed to scan row: %w", err)
+		}
+		row := make(map[string]interface{}, len(cols))
+		for i, col := range cols {
+			row[col] = values[i]
+		}
+		result = append(result, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("duckframe: Collect iteration error: %w", err)
+	}
+
+	return result, nil
+}
+
+// ToSlice materializes the DataFrame into a slice of structs.
+// dest must be a pointer to a slice of structs. Struct fields are matched
+// to columns by the "df" tag, or by field name (case-insensitive).
+//
+// Example:
+//
+//	type Employee struct {
+//	    Name    string  `df:"name"`
+//	    Age     int64   `df:"age"`
+//	    Salary  float64 `df:"salary"`
+//	}
+//	var employees []Employee
+//	err := df.ToSlice(&employees)
+func (df *DataFrame) ToSlice(dest interface{}) error {
+	if df.err != nil {
+		return df.err
+	}
+
+	// Validate dest is *[]Struct
+	rv := reflect.ValueOf(dest)
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return fmt.Errorf("duckframe: ToSlice requires a non-nil pointer to a slice")
+	}
+	sliceVal := rv.Elem()
+	if sliceVal.Kind() != reflect.Slice {
+		return fmt.Errorf("duckframe: ToSlice requires a pointer to a slice, got pointer to %s", sliceVal.Kind())
+	}
+	elemType := sliceVal.Type().Elem()
+	if elemType.Kind() != reflect.Struct {
+		return fmt.Errorf("duckframe: ToSlice requires a slice of structs, got slice of %s", elemType.Kind())
+	}
+
+	// Build column-to-field mapping
+	fieldMap := buildFieldMap(elemType)
+
+	query := fmt.Sprintf("SELECT * FROM %s", df.tableName)
+	rows, err := df.db.Conn().Query(query)
+	if err != nil {
+		return fmt.Errorf("duckframe: ToSlice query failed: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return fmt.Errorf("duckframe: ToSlice failed to get columns: %w", err)
+	}
+
+	for rows.Next() {
+		values := make([]interface{}, len(cols))
+		ptrs := make([]interface{}, len(cols))
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(ptrs...); err != nil {
+			return fmt.Errorf("duckframe: ToSlice failed to scan row: %w", err)
+		}
+
+		elem := reflect.New(elemType).Elem()
+		for i, col := range cols {
+			fieldIdx, ok := fieldMap[strings.ToLower(col)]
+			if !ok {
+				continue
+			}
+			field := elem.Field(fieldIdx)
+			if values[i] == nil {
+				continue
+			}
+			if err := setField(field, values[i]); err != nil {
+				return fmt.Errorf("duckframe: ToSlice failed to set field %q: %w", col, err)
+			}
+		}
+		sliceVal = reflect.Append(sliceVal, elem)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("duckframe: ToSlice iteration error: %w", err)
+	}
+
+	rv.Elem().Set(sliceVal)
+	return nil
+}
+
+// buildFieldMap creates a mapping from lowercase column name to struct field index.
+// It checks for "df" tags first, then falls back to field name.
+func buildFieldMap(t reflect.Type) map[string]int {
+	m := make(map[string]int)
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		tag := f.Tag.Get("df")
+		if tag != "" && tag != "-" {
+			m[strings.ToLower(tag)] = i
+		} else {
+			m[strings.ToLower(f.Name)] = i
+		}
+	}
+	return m
+}
+
+// setField converts a database value to the appropriate Go type and sets the struct field.
+func setField(field reflect.Value, value interface{}) error {
+	v := reflect.ValueOf(value)
+	fieldType := field.Type()
+
+	// Direct assignable
+	if v.Type().AssignableTo(fieldType) {
+		field.Set(v)
+		return nil
+	}
+
+	// Convertible
+	if v.Type().ConvertibleTo(fieldType) {
+		field.Set(v.Convert(fieldType))
+		return nil
+	}
+
+	// Handle common numeric conversions from database
+	switch field.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		switch val := value.(type) {
+		case int64:
+			field.SetInt(val)
+			return nil
+		case int32:
+			field.SetInt(int64(val))
+			return nil
+		case float64:
+			field.SetInt(int64(val))
+			return nil
+		}
+	case reflect.Float32, reflect.Float64:
+		switch val := value.(type) {
+		case float64:
+			field.SetFloat(val)
+			return nil
+		case int64:
+			field.SetFloat(float64(val))
+			return nil
+		}
+	case reflect.String:
+		field.SetString(fmt.Sprintf("%v", value))
+		return nil
+	case reflect.Bool:
+		if b, ok := value.(bool); ok {
+			field.SetBool(b)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("cannot convert %T to %s", value, fieldType)
 }
