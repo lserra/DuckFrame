@@ -69,10 +69,12 @@
 - [x] Fix: `SetMaxOpenConns(1)` — tabelas temporárias são connection-scoped no DuckDB
 
 ## Fase 7 — Conectores Externos
-- [ ] `ReadSQLite(path, table string) *DataFrame`
-- [ ] `ReadPostgres(dsn, query string) *DataFrame` (opcional)
-- [ ] `ReadMySQL(dsn, query string) *DataFrame` (opcional)
-- [ ] `ReadFromDB(db *sql.DB, query string) *DataFrame` — genérico via database/sql
+- [x] `ReadSQLite(path, table string) *DataFrame` — via DuckDB sqlite extension
+- [x] `ReadPostgres(dsn, query string) *DataFrame` — via DuckDB postgres extension
+- [x] `ReadMySQL(dsn, query string) *DataFrame` — via DuckDB mysql extension
+- [x] `ReadFromDB(db *sql.DB, query string) *DataFrame` — genérico via database/sql
+- [x] `loadExtension(name)` — carregamento inteligente (LOAD first, INSTALL fallback)
+- [x] `mapSQLTypeToDuck()` — mapeamento de tipos database/sql → DuckDB
 
 ## Fase 8 — Qualidade e Ecossistema Go
 - [ ] Cobertura de testes ≥ 80%

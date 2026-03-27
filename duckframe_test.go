@@ -2,6 +2,7 @@ package duckframe_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1951,5 +1952,240 @@ func TestChunkedProcessing(t *testing.T) {
 	// Verify: from 7 employees, 4 have salary > 80000
 	if totalHighSalary != 4 {
 		t.Fatalf("expected 4 high salary employees total, got %d", totalHighSalary)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7 — External Connectors Tests
+// ---------------------------------------------------------------------------
+
+// loadTestExtension tries to load a DuckDB extension, skipping if unavailable.
+func loadTestExtension(t *testing.T, db *engine.DB, name string) {
+	t.Helper()
+	if _, err := db.Conn().Exec(fmt.Sprintf("LOAD %s", name)); err != nil {
+		t.Skipf("%s extension not available (not pre-installed): %v", name, err)
+	}
+}
+
+func TestReadSQLite(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	loadTestExtension(t, db, "sqlite")
+
+	// Create a SQLite file using DuckDB's sqlite extension
+	tmpDir := t.TempDir()
+	sqlitePath := filepath.Join(tmpDir, "test.sqlite")
+
+	// Create a SQLite database with a table
+	_, err := db.Conn().Exec(fmt.Sprintf("ATTACH '%s' AS sqlite_db (TYPE SQLITE)", sqlitePath))
+	if err != nil {
+		t.Fatalf("failed to attach SQLite: %v", err)
+	}
+	_, err = db.Conn().Exec("CREATE TABLE sqlite_db.people (name VARCHAR, age INTEGER, city VARCHAR)")
+	if err != nil {
+		t.Fatalf("failed to create SQLite table: %v", err)
+	}
+	_, err = db.Conn().Exec("INSERT INTO sqlite_db.people VALUES ('Alice', 30, 'São Paulo'), ('Bob', 25, 'New York'), ('Carol', 35, 'Berlin')")
+	if err != nil {
+		t.Fatalf("failed to insert into SQLite: %v", err)
+	}
+	_, err = db.Conn().Exec("DETACH sqlite_db")
+	if err != nil {
+		t.Fatalf("failed to detach SQLite: %v", err)
+	}
+
+	// Now test ReadSQLite
+	df, err := duckframe.ReadSQLite(db, sqlitePath, "people")
+	if err != nil {
+		t.Fatalf("ReadSQLite failed: %v", err)
+	}
+	defer df.Close()
+
+	r, c, err := df.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 3 {
+		t.Fatalf("expected 3 rows, got %d", r)
+	}
+	if c != 3 {
+		t.Fatalf("expected 3 columns, got %d", c)
+	}
+
+	cols := df.Columns()
+	if cols[0] != "name" || cols[1] != "age" || cols[2] != "city" {
+		t.Fatalf("unexpected columns: %v", cols)
+	}
+}
+
+func TestReadSQLiteNotFound(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	_, err := duckframe.ReadSQLite(db, "/nonexistent/path.sqlite", "nope")
+	if err == nil {
+		t.Fatal("expected error for non-existent SQLite file")
+	}
+}
+
+func TestReadSQLiteFilterAndSelect(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	loadTestExtension(t, db, "sqlite")
+
+	// Create SQLite test file
+	tmpDir := t.TempDir()
+	sqlitePath := filepath.Join(tmpDir, "test2.sqlite")
+
+	_, err := db.Conn().Exec(fmt.Sprintf("ATTACH '%s' AS sqlite_db2 (TYPE SQLITE)", sqlitePath))
+	if err != nil {
+		t.Fatalf("failed to attach: %v", err)
+	}
+	_, err = db.Conn().Exec("CREATE TABLE sqlite_db2.scores (student VARCHAR, grade INTEGER)")
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+	_, err = db.Conn().Exec("INSERT INTO sqlite_db2.scores VALUES ('Alice', 95), ('Bob', 72), ('Carol', 88), ('David', 65)")
+	if err != nil {
+		t.Fatalf("failed to insert: %v", err)
+	}
+	db.Conn().Exec("DETACH sqlite_db2")
+
+	// Read and apply operations
+	df, err := duckframe.ReadSQLite(db, sqlitePath, "scores")
+	if err != nil {
+		t.Fatalf("ReadSQLite failed: %v", err)
+	}
+	defer df.Close()
+
+	// Filter for high grades
+	filtered, err := df.Filter("grade >= 80")
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	defer filtered.Close()
+
+	r, _, err := filtered.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 2 {
+		t.Fatalf("expected 2 rows with grade >= 80, got %d", r)
+	}
+}
+
+func TestReadFromDB(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	// Use DuckDB itself as the "external" database via database/sql
+	extDB := db.Conn() // *sql.DB
+
+	// Create a table in the external DB
+	_, err := extDB.Exec("CREATE TABLE ext_products (id INTEGER, name VARCHAR, price DOUBLE)")
+	if err != nil {
+		t.Fatalf("failed to create external table: %v", err)
+	}
+	_, err = extDB.Exec("INSERT INTO ext_products VALUES (1, 'Widget', 9.99), (2, 'Gadget', 24.99), (3, 'Doohickey', 4.50)")
+	if err != nil {
+		t.Fatalf("failed to insert: %v", err)
+	}
+
+	// ReadFromDB using the same connection as external source
+	df, err := duckframe.ReadFromDB(db, extDB, "SELECT * FROM ext_products")
+	if err != nil {
+		t.Fatalf("ReadFromDB failed: %v", err)
+	}
+	defer df.Close()
+
+	r, c, err := df.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 3 {
+		t.Fatalf("expected 3 rows, got %d", r)
+	}
+	if c != 3 {
+		t.Fatalf("expected 3 columns, got %d", c)
+	}
+
+	cols := df.Columns()
+	if cols[0] != "id" || cols[1] != "name" || cols[2] != "price" {
+		t.Fatalf("unexpected columns: %v", cols)
+	}
+}
+
+func TestReadFromDBWithFilter(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	extDB := db.Conn()
+	_, err := extDB.Exec("CREATE TABLE ext_items (name VARCHAR, qty INTEGER)")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	_, err = extDB.Exec("INSERT INTO ext_items VALUES ('A', 10), ('B', 5), ('C', 20), ('D', 3)")
+	if err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	df, err := duckframe.ReadFromDB(db, extDB, "SELECT * FROM ext_items")
+	if err != nil {
+		t.Fatalf("ReadFromDB failed: %v", err)
+	}
+	defer df.Close()
+
+	// Apply DuckFrame operations on the imported data
+	filtered, err := df.Filter("qty > 5")
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	defer filtered.Close()
+
+	r, _, err := filtered.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 2 {
+		t.Fatalf("expected 2 items with qty > 5, got %d", r)
+	}
+}
+
+func TestReadFromDBBadQuery(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	extDB := db.Conn()
+	_, err := duckframe.ReadFromDB(db, extDB, "SELECT * FROM nonexistent_table_xyz")
+	if err == nil {
+		t.Fatal("expected error for bad query")
+	}
+}
+
+func TestReadPostgresNoServer(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	loadTestExtension(t, db, "postgres")
+
+	// This should fail because there's no Postgres server running
+	// but it tests that the function handles errors correctly
+	_, err := duckframe.ReadPostgres(db, "host=localhost port=1 dbname=none user=none", "test_table")
+	if err == nil {
+		t.Fatal("expected error when connecting to non-existent Postgres")
+	}
+}
+
+func TestReadMySQLNoServer(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	loadTestExtension(t, db, "mysql")
+
+	_, err := duckframe.ReadMySQL(db, "host=localhost port=1 user=none database=none", "test_table")
+	if err == nil {
+		t.Fatal("expected error when connecting to non-existent MySQL")
 	}
 }

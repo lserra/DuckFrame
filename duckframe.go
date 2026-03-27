@@ -1074,3 +1074,182 @@ func queryColumnsCtx(ctx context.Context, db *engine.DB, tableName string) ([]st
 	}
 	return cols, nil
 }
+
+// ---------------------------------------------------------------------------
+// Phase 7 — External Connectors
+// ---------------------------------------------------------------------------
+
+// loadExtension attempts to load a DuckDB extension.
+// It tries LOAD first, falling back to INSTALL + LOAD.
+func loadExtension(db *engine.DB, name string) error {
+	if _, err := db.Conn().Exec(fmt.Sprintf("LOAD %s", name)); err == nil {
+		return nil
+	}
+	if _, err := db.Conn().Exec(fmt.Sprintf("INSTALL %s; LOAD %s;", name, name)); err != nil {
+		return fmt.Errorf("duckframe: failed to load %s extension: %w", name, err)
+	}
+	return nil
+}
+
+// ReadSQLite reads a table from a SQLite database file into a DataFrame.
+// Uses DuckDB's built-in sqlite scanner extension.
+func ReadSQLite(db *engine.DB, path string, table string) (*DataFrame, error) {
+	if err := loadExtension(db, "sqlite"); err != nil {
+		return nil, err
+	}
+
+	query := fmt.Sprintf("SELECT * FROM sqlite_scan('%s', '%s')", path, table)
+	return FromQuery(db, query)
+}
+
+// ReadPostgres reads data from a PostgreSQL database into a DataFrame.
+// Uses DuckDB's built-in postgres scanner extension.
+// The dsn should be a PostgreSQL connection string (e.g. "host=localhost dbname=mydb user=postgres password=secret").
+func ReadPostgres(db *engine.DB, dsn string, query string) (*DataFrame, error) {
+	if err := loadExtension(db, "postgres"); err != nil {
+		return nil, err
+	}
+
+	// Attach the Postgres database
+	attachName := "pg_attached"
+	attachSQL := fmt.Sprintf("ATTACH '%s' AS %s (TYPE POSTGRES)", dsn, attachName)
+	if _, err := db.Conn().Exec(attachSQL); err != nil {
+		return nil, fmt.Errorf("duckframe: failed to attach postgres: %w", err)
+	}
+	defer db.Conn().Exec(fmt.Sprintf("DETACH %s", attachName))
+
+	// If query is just a table name (no spaces), select from it directly
+	selectQuery := query
+	if !strings.Contains(query, " ") {
+		selectQuery = fmt.Sprintf("SELECT * FROM %s.%s", attachName, query)
+	}
+	return FromQuery(db, selectQuery)
+}
+
+// ReadMySQL reads data from a MySQL database into a DataFrame.
+// Uses DuckDB's built-in mysql scanner extension.
+// The dsn should be a MySQL connection string (e.g. "host=localhost user=root password=secret database=mydb").
+func ReadMySQL(db *engine.DB, dsn string, query string) (*DataFrame, error) {
+	if err := loadExtension(db, "mysql"); err != nil {
+		return nil, err
+	}
+
+	// Attach the MySQL database
+	attachName := "mysql_attached"
+	attachSQL := fmt.Sprintf("ATTACH '%s' AS %s (TYPE MYSQL)", dsn, attachName)
+	if _, err := db.Conn().Exec(attachSQL); err != nil {
+		return nil, fmt.Errorf("duckframe: failed to attach mysql: %w", err)
+	}
+	defer db.Conn().Exec(fmt.Sprintf("DETACH %s", attachName))
+
+	// If query is just a table name (no spaces), select from it directly
+	selectQuery := query
+	if !strings.Contains(query, " ") {
+		selectQuery = fmt.Sprintf("SELECT * FROM %s.%s", attachName, query)
+	}
+	return FromQuery(db, selectQuery)
+}
+
+// ReadFromDB reads data from any database/sql compatible connection into a DataFrame.
+// It executes the query on the external DB, fetches all rows into memory, then
+// creates a DuckDB-backed DataFrame from the results.
+func ReadFromDB(duckDB *engine.DB, extDB *sql.DB, query string) (*DataFrame, error) {
+	rows, err := extDB.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("duckframe: external query failed: %w", err)
+	}
+	defer rows.Close()
+
+	colNames, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("duckframe: failed to get external columns: %w", err)
+	}
+
+	colTypes, err := rows.ColumnTypes()
+	if err != nil {
+		return nil, fmt.Errorf("duckframe: failed to get external column types: %w", err)
+	}
+
+	// Collect ALL rows into memory first (avoids holding the ext connection
+	// open while inserting into DuckDB, which would deadlock if they share a pool).
+	var allRows [][]interface{}
+	for rows.Next() {
+		values := make([]interface{}, len(colNames))
+		scanDest := make([]interface{}, len(colNames))
+		for i := range values {
+			scanDest[i] = &values[i]
+		}
+		if err := rows.Scan(scanDest...); err != nil {
+			return nil, fmt.Errorf("duckframe: failed to scan external row: %w", err)
+		}
+		allRows = append(allRows, values)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("duckframe: error reading external rows: %w", err)
+	}
+	rows.Close() // explicitly close before inserting
+
+	// Build CREATE TABLE with inferred types
+	tableName := nextTableName()
+	var colDefs []string
+	for i, ct := range colTypes {
+		duckType := mapSQLTypeToDuck(ct)
+		colDefs = append(colDefs, fmt.Sprintf("%q %s", colNames[i], duckType))
+	}
+
+	createSQL := fmt.Sprintf("CREATE TEMPORARY TABLE %s (%s)", tableName, strings.Join(colDefs, ", "))
+	if _, err := duckDB.Conn().Exec(createSQL); err != nil {
+		return nil, fmt.Errorf("duckframe: failed to create table for external data: %w", err)
+	}
+
+	// Build INSERT template
+	placeholders := make([]string, len(colNames))
+	for i := range placeholders {
+		placeholders[i] = "?"
+	}
+	insertSQL := fmt.Sprintf("INSERT INTO %s VALUES (%s)", tableName, strings.Join(placeholders, ", "))
+
+	// Insert all collected rows into DuckDB
+	for _, rowVals := range allRows {
+		if _, err := duckDB.Conn().Exec(insertSQL, rowVals...); err != nil {
+			duckDB.Conn().Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName))
+			return nil, fmt.Errorf("duckframe: failed to insert external row: %w", err)
+		}
+	}
+
+	columns, err := queryColumns(duckDB.Conn(), tableName)
+	if err != nil {
+		duckDB.Conn().Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName))
+		return nil, err
+	}
+
+	return &DataFrame{db: duckDB, tableName: tableName, columns: columns, owned: true}, nil
+}
+
+// mapSQLTypeToDuck maps a database/sql ColumnType to a DuckDB type string.
+func mapSQLTypeToDuck(ct *sql.ColumnType) string {
+	dbTypeName := strings.ToUpper(ct.DatabaseTypeName())
+
+	switch {
+	case strings.Contains(dbTypeName, "INT"):
+		return "BIGINT"
+	case strings.Contains(dbTypeName, "FLOAT") || strings.Contains(dbTypeName, "DOUBLE") || strings.Contains(dbTypeName, "REAL"):
+		return "DOUBLE"
+	case strings.Contains(dbTypeName, "DECIMAL") || strings.Contains(dbTypeName, "NUMERIC"):
+		return "DOUBLE"
+	case strings.Contains(dbTypeName, "BOOL"):
+		return "BOOLEAN"
+	case strings.Contains(dbTypeName, "TEXT") || strings.Contains(dbTypeName, "CHAR") || strings.Contains(dbTypeName, "VARCHAR"):
+		return "VARCHAR"
+	case strings.Contains(dbTypeName, "BLOB") || strings.Contains(dbTypeName, "BINARY"):
+		return "BLOB"
+	case strings.Contains(dbTypeName, "DATE") && !strings.Contains(dbTypeName, "TIME"):
+		return "DATE"
+	case strings.Contains(dbTypeName, "TIMESTAMP") || strings.Contains(dbTypeName, "DATETIME"):
+		return "TIMESTAMP"
+	case strings.Contains(dbTypeName, "TIME"):
+		return "TIME"
+	default:
+		return "VARCHAR"
+	}
+}

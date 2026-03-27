@@ -635,4 +635,79 @@ CGO_ENABLED=1 go test -bench=. -benchmem -run=^$ ./...
 
 ---
 
+### Conectores Externos
+
+#### `duckframe.ReadSQLite(db *engine.DB, path, table string) (*DataFrame, error)`
+
+Lê uma tabela de um banco SQLite usando a extensão sqlite do DuckDB.
+
+```go
+df, err := duckframe.ReadSQLite(db, "legacy_data.sqlite", "users")
+defer df.Close()
+
+// Operações normais funcionam em cima dos dados importados
+filtered, err := df.Filter("age > 30")
+```
+
+#### `duckframe.ReadPostgres(db *engine.DB, dsn, query string) (*DataFrame, error)`
+
+Lê dados de um banco PostgreSQL. Usa a extensão postgres do DuckDB.
+
+```go
+dsn := "host=localhost dbname=mydb user=postgres password=secret"
+df, err := duckframe.ReadPostgres(db, dsn, "customers")     // tabela inteira
+df, err := duckframe.ReadPostgres(db, dsn, "SELECT * FROM orders WHERE total > 100") // query
+```
+
+> **Nota:** Requer a extensão `postgres` do DuckDB. Use `INSTALL postgres` no DuckDB para instalar.
+
+#### `duckframe.ReadMySQL(db *engine.DB, dsn, query string) (*DataFrame, error)`
+
+Lê dados de um banco MySQL. Usa a extensão mysql do DuckDB.
+
+```go
+dsn := "host=localhost user=root password=secret database=mydb"
+df, err := duckframe.ReadMySQL(db, dsn, "products")
+```
+
+> **Nota:** Requer a extensão `mysql` do DuckDB. Use `INSTALL mysql` no DuckDB para instalar.
+
+#### `duckframe.ReadFromDB(duckDB *engine.DB, extDB *sql.DB, query string) (*DataFrame, error)`
+
+Conector genérico que funciona com qualquer banco compatível com `database/sql`. Executa a query no banco externo, coleta os dados em memória e cria um DataFrame no DuckDB.
+
+```go
+import (
+    "database/sql"
+    _ "github.com/lib/pq"  // driver PostgreSQL
+)
+
+// Conectar ao banco externo
+extDB, _ := sql.Open("postgres", "host=localhost dbname=mydb sslmode=disable")
+defer extDB.Close()
+
+// Importar dados para DuckFrame
+df, err := duckframe.ReadFromDB(duckDB, extDB, "SELECT * FROM large_table WHERE date > '2024-01-01'")
+defer df.Close()
+
+// Agora usar operações DuckFrame normalmente
+grouped, _ := df.GroupBy("category").Agg("revenue", "sum")
+grouped.Show()
+```
+
+**Tipos suportados no mapeamento automático:**
+| Tipo Externo | Tipo DuckDB |
+|---|---|
+| INT/INTEGER/BIGINT/SMALLINT | BIGINT |
+| FLOAT/DOUBLE/REAL | DOUBLE |
+| DECIMAL/NUMERIC | DOUBLE |
+| BOOL/BOOLEAN | BOOLEAN |
+| TEXT/CHAR/VARCHAR | VARCHAR |
+| BLOB/BINARY | BLOB |
+| DATE | DATE |
+| TIMESTAMP/DATETIME | TIMESTAMP |
+| TIME | TIME |
+
+---
+
 > **Nota:** Este guia será expandido à medida que novas funcionalidades forem implementadas.
