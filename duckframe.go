@@ -3,11 +3,13 @@
 package duckframe
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"text/tabwriter"
 
@@ -920,4 +922,155 @@ func (df *DataFrame) Describe() (*DataFrame, error) {
 
 	query := strings.Join(parts, " UNION ALL ")
 	return FromQuery(df.db, query)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 — Concurrency & Streaming
+// ---------------------------------------------------------------------------
+
+// ApplyFunc is a function that transforms a DataFrame into another.
+type ApplyFunc func(*DataFrame) (*DataFrame, error)
+
+// ParallelApply applies fn to each DataFrame in dfs concurrently
+// and returns the results in the same order.
+// All DataFrames must share the same engine.DB.
+func ParallelApply(dfs []*DataFrame, fn ApplyFunc) ([]*DataFrame, error) {
+	results := make([]*DataFrame, len(dfs))
+	errs := make([]error, len(dfs))
+
+	var wg sync.WaitGroup
+	wg.Add(len(dfs))
+
+	for i, df := range dfs {
+		go func(idx int, d *DataFrame) {
+			defer wg.Done()
+			results[idx], errs[idx] = fn(d)
+		}(i, df)
+	}
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			// Clean up any successfully created DataFrames
+			for j, r := range results {
+				if j != i && r != nil {
+					r.Close()
+				}
+			}
+			return nil, fmt.Errorf("duckframe: ParallelApply failed on DataFrame %d: %w", i, err)
+		}
+	}
+
+	return results, nil
+}
+
+// ChunkResult holds a chunk produced by ReadCSVChunked.
+type ChunkResult struct {
+	DataFrame *DataFrame
+	Index     int
+	Err       error
+}
+
+// ReadCSVChunked reads a CSV file in chunks of chunkSize rows,
+// sending each chunk as a DataFrame to the returned channel.
+// The caller must close each DataFrame after use.
+func ReadCSVChunked(ctx context.Context, db *engine.DB, path string, chunkSize int) <-chan ChunkResult {
+	ch := make(chan ChunkResult)
+
+	go func() {
+		defer close(ch)
+
+		// Count total rows first
+		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM read_csv_auto('%s')", path)
+		var totalRows int
+		if err := db.Conn().QueryRowContext(ctx, countQuery).Scan(&totalRows); err != nil {
+			ch <- ChunkResult{Err: fmt.Errorf("duckframe: failed to count CSV rows: %w", err)}
+			return
+		}
+
+		idx := 0
+		for offset := 0; offset < totalRows; offset += chunkSize {
+			select {
+			case <-ctx.Done():
+				ch <- ChunkResult{Err: ctx.Err(), Index: idx}
+				return
+			default:
+			}
+
+			query := fmt.Sprintf(
+				"SELECT * FROM read_csv_auto('%s') LIMIT %d OFFSET %d",
+				path, chunkSize, offset,
+			)
+			df, err := FromQuery(db, query)
+			ch <- ChunkResult{DataFrame: df, Index: idx, Err: err}
+			if err != nil {
+				return
+			}
+			idx++
+		}
+	}()
+
+	return ch
+}
+
+// FromQueryContext creates a DataFrame from a SQL query, with context support.
+func FromQueryContext(ctx context.Context, db *engine.DB, query string) (*DataFrame, error) {
+	tableName := nextTableName()
+	createSQL := fmt.Sprintf("CREATE TEMPORARY TABLE %s AS %s", tableName, query)
+
+	if _, err := db.Conn().ExecContext(ctx, createSQL); err != nil {
+		return nil, fmt.Errorf("duckframe: FromQueryContext failed: %w", err)
+	}
+
+	columns, err := queryColumnsCtx(ctx, db, tableName)
+	if err != nil {
+		db.Conn().ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName))
+		return nil, err
+	}
+
+	return &DataFrame{db: db, tableName: tableName, columns: columns, owned: true}, nil
+}
+
+// ReadCSVContext reads a CSV file into a DataFrame, with context support.
+func ReadCSVContext(ctx context.Context, db *engine.DB, path string) (*DataFrame, error) {
+	query := fmt.Sprintf("SELECT * FROM read_csv_auto('%s')", path)
+	return FromQueryContext(ctx, db, query)
+}
+
+// FilterContext returns a filtered DataFrame, with context support.
+func (df *DataFrame) FilterContext(ctx context.Context, expr string) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	query := fmt.Sprintf("SELECT * FROM %s WHERE %s", df.tableName, expr)
+	return FromQueryContext(ctx, df.db, query)
+}
+
+// SortContext returns a sorted DataFrame, with context support.
+func (df *DataFrame) SortContext(ctx context.Context, col string, asc bool) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	order := "ASC"
+	if !asc {
+		order = "DESC"
+	}
+	query := fmt.Sprintf("SELECT * FROM %s ORDER BY %q %s", df.tableName, col, order)
+	return FromQueryContext(ctx, df.db, query)
+}
+
+// queryColumnsCtx returns column names with context support.
+func queryColumnsCtx(ctx context.Context, db *engine.DB, tableName string) ([]string, error) {
+	rows, err := db.Conn().QueryContext(ctx, fmt.Sprintf("SELECT * FROM %s LIMIT 0", tableName))
+	if err != nil {
+		return nil, fmt.Errorf("duckframe: failed to query columns: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("duckframe: failed to get columns: %w", err)
+	}
+	return cols, nil
 }

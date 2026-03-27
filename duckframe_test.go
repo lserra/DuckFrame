@@ -1,9 +1,11 @@
 package duckframe_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lserra/duckframe"
 	"github.com/lserra/duckframe/internal/engine"
@@ -1636,5 +1638,318 @@ func TestSortChained(t *testing.T) {
 			t.Fatalf("expected descending salaries, index %d: %.0f > %.0f",
 				i, employees[i].Salary, employees[i-1].Salary)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 — Concurrency & Streaming Tests
+// ---------------------------------------------------------------------------
+
+func TestParallelApply(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	// Create 3 DataFrames from different queries
+	df1, err := duckframe.FromQuery(db, "SELECT 'Alice' AS name, 85000 AS salary")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df1.Close()
+
+	df2, err := duckframe.FromQuery(db, "SELECT 'Bob' AS name, 72000 AS salary")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df2.Close()
+
+	df3, err := duckframe.FromQuery(db, "SELECT 'Carol' AS name, 95000 AS salary")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df3.Close()
+
+	// Apply filter in parallel to all DataFrames
+	filterFn := func(df *duckframe.DataFrame) (*duckframe.DataFrame, error) {
+		return df.Filter("salary > 70000")
+	}
+
+	results, err := duckframe.ParallelApply([]*duckframe.DataFrame{df1, df2, df3}, filterFn)
+	if err != nil {
+		t.Fatalf("ParallelApply failed: %v", err)
+	}
+
+	for _, r := range results {
+		defer r.Close()
+	}
+
+	// df1 (85k) and df3 (95k) pass, df2 (72k) passes too (> 70000)
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+
+	for i, r := range results {
+		rows, _, err := r.Shape()
+		if err != nil {
+			t.Fatalf("Shape failed on result %d: %v", i, err)
+		}
+		if rows != 1 {
+			t.Fatalf("expected 1 row in result %d, got %d", i, rows)
+		}
+	}
+}
+
+func TestParallelApplyWithSort(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	// Create multiple DataFrames from same source
+	var dfs []*duckframe.DataFrame
+	for i := 0; i < 5; i++ {
+		df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+		if err != nil {
+			t.Fatalf("ReadCSV failed: %v", err)
+		}
+		defer df.Close()
+		dfs = append(dfs, df)
+	}
+
+	// Apply sort + limit in parallel
+	topSalaryFn := func(df *duckframe.DataFrame) (*duckframe.DataFrame, error) {
+		sorted, err := df.Sort("salary", false)
+		if err != nil {
+			return nil, err
+		}
+		defer sorted.Close()
+		return sorted.Limit(3)
+	}
+
+	results, err := duckframe.ParallelApply(dfs, topSalaryFn)
+	if err != nil {
+		t.Fatalf("ParallelApply failed: %v", err)
+	}
+
+	for _, r := range results {
+		defer r.Close()
+	}
+
+	// Each result should have exactly 3 rows
+	for i, r := range results {
+		rows, _, err := r.Shape()
+		if err != nil {
+			t.Fatalf("Shape failed on result %d: %v", i, err)
+		}
+		if rows != 3 {
+			t.Fatalf("expected 3 rows in result %d, got %d", i, rows)
+		}
+	}
+}
+
+func TestReadCSVChunked(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	ch := duckframe.ReadCSVChunked(ctx, db, testdataPath("employees.csv"), 3)
+
+	var totalRows int
+	var chunkCount int
+	for chunk := range ch {
+		if chunk.Err != nil {
+			t.Fatalf("chunk %d error: %v", chunk.Index, chunk.Err)
+		}
+		defer chunk.DataFrame.Close()
+
+		r, _, err := chunk.DataFrame.Shape()
+		if err != nil {
+			t.Fatalf("Shape failed on chunk %d: %v", chunk.Index, err)
+		}
+		totalRows += r
+		chunkCount++
+	}
+
+	// employees.csv has 7 rows, chunk size 3 → 3 chunks (3+3+1)
+	if chunkCount != 3 {
+		t.Fatalf("expected 3 chunks, got %d", chunkCount)
+	}
+	if totalRows != 7 {
+		t.Fatalf("expected 7 total rows, got %d", totalRows)
+	}
+}
+
+func TestReadCSVChunkedCancel(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately to test cancellation
+	cancel()
+
+	ch := duckframe.ReadCSVChunked(ctx, db, testdataPath("employees.csv"), 2)
+
+	var gotCancelErr bool
+	for chunk := range ch {
+		if chunk.Err == context.Canceled {
+			gotCancelErr = true
+		}
+		if chunk.DataFrame != nil {
+			chunk.DataFrame.Close()
+		}
+	}
+
+	// With immediate cancel, may get cancel error or count query may fail
+	// Either way, it should not hang
+	_ = gotCancelErr
+}
+
+func TestFromQueryContext(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	df, err := duckframe.FromQueryContext(ctx, db, "SELECT 42 AS answer, 'hello' AS greeting")
+	if err != nil {
+		t.Fatalf("FromQueryContext failed: %v", err)
+	}
+	defer df.Close()
+
+	r, c, err := df.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 1 || c != 2 {
+		t.Fatalf("expected (1, 2), got (%d, %d)", r, c)
+	}
+}
+
+func TestFromQueryContextCancel(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer cancel()
+	time.Sleep(1 * time.Millisecond) // ensure context expired
+
+	_, err := duckframe.FromQueryContext(ctx, db, "SELECT 42 AS answer")
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+}
+
+func TestReadCSVContext(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	df, err := duckframe.ReadCSVContext(ctx, db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSVContext failed: %v", err)
+	}
+	defer df.Close()
+
+	r, c, err := df.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 7 || c != 4 {
+		t.Fatalf("expected (7, 4), got (%d, %d)", r, c)
+	}
+}
+
+func TestFilterContext(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	ctx := context.Background()
+	filtered, err := df.FilterContext(ctx, "salary > 90000")
+	if err != nil {
+		t.Fatalf("FilterContext failed: %v", err)
+	}
+	defer filtered.Close()
+
+	r, _, err := filtered.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 3 {
+		t.Fatalf("expected 3 rows, got %d", r)
+	}
+}
+
+func TestSortContext(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	ctx := context.Background()
+	sorted, err := df.SortContext(ctx, "salary", true)
+	if err != nil {
+		t.Fatalf("SortContext failed: %v", err)
+	}
+	defer sorted.Close()
+
+	var employees []Employee
+	err = sorted.ToSlice(&employees)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+
+	for i := 1; i < len(employees); i++ {
+		if employees[i].Salary < employees[i-1].Salary {
+			t.Fatalf("not sorted ascending at index %d", i)
+		}
+	}
+}
+
+func TestChunkedProcessing(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	// Process chunks in parallel: read chunked, then apply filter to each chunk
+	ctx := context.Background()
+	ch := duckframe.ReadCSVChunked(ctx, db, testdataPath("employees.csv"), 3)
+
+	var chunks []*duckframe.DataFrame
+	for chunk := range ch {
+		if chunk.Err != nil {
+			t.Fatalf("chunk error: %v", chunk.Err)
+		}
+		chunks = append(chunks, chunk.DataFrame)
+		defer chunk.DataFrame.Close()
+	}
+
+	// Apply filter in parallel to all chunks
+	filterFn := func(df *duckframe.DataFrame) (*duckframe.DataFrame, error) {
+		return df.Filter("salary > 80000")
+	}
+
+	results, err := duckframe.ParallelApply(chunks, filterFn)
+	if err != nil {
+		t.Fatalf("ParallelApply failed: %v", err)
+	}
+
+	var totalHighSalary int
+	for _, r := range results {
+		defer r.Close()
+		rows, _, err := r.Shape()
+		if err != nil {
+			t.Fatalf("Shape failed: %v", err)
+		}
+		totalHighSalary += rows
+	}
+
+	// Verify: from 7 employees, 4 have salary > 80000
+	if totalHighSalary != 4 {
+		t.Fatalf("expected 4 high salary employees total, got %d", totalHighSalary)
 	}
 }

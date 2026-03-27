@@ -62,10 +62,11 @@
 - [x] `Describe() (*DataFrame, error)` — estatísticas descritivas (count, mean, std, min, max)
 
 ## Fase 6 — Concorrência e Streaming
-- [ ] Pipeline concorrente: processar múltiplos DataFrames em paralelo
-- [ ] Streaming de leitura para arquivos grandes (chunked reading)
-- [ ] Context support (`context.Context`) para cancelamento e timeout
-- [ ] Benchmarks de operações concorrentes vs sequenciais
+- [x] Pipeline concorrente: `ParallelApply` — processar múltiplos DataFrames em paralelo
+- [x] Streaming de leitura: `ReadCSVChunked` — leitura chunked com canal
+- [x] Context support: `FromQueryContext`, `ReadCSVContext`, `FilterContext`, `SortContext`
+- [x] Benchmarks: `duckframe_bench_test.go` — Sequential vs Parallel (Filter, Sort+Limit, Chunked)
+- [x] Fix: `SetMaxOpenConns(1)` — tabelas temporárias são connection-scoped no DuckDB
 
 ## Fase 7 — Conectores Externos
 - [ ] `ReadSQLite(path, table string) *DataFrame`

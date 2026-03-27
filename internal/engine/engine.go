@@ -26,6 +26,10 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("duckframe: failed to ping duckdb: %w", err)
 	}
 
+	// Force single connection: DuckDB temporary tables are connection-scoped,
+	// and DuckDB handles internal parallelism via vectorized execution.
+	conn.SetMaxOpenConns(1)
+
 	return &DB{conn: conn}, nil
 }
 

@@ -541,4 +541,98 @@ result.Show()
 
 ---
 
+### Concorrência e Streaming
+
+#### `duckframe.ParallelApply(dfs []*DataFrame, fn ApplyFunc) ([]*DataFrame, error)`
+
+Aplica uma função de transformação a múltiplos DataFrames em paralelo, retornando os resultados na mesma ordem.
+
+```go
+filterFn := func(df *duckframe.DataFrame) (*duckframe.DataFrame, error) {
+    return df.Filter("salary > 80000")
+}
+
+results, err := duckframe.ParallelApply(dataframes, filterFn)
+for _, r := range results {
+    defer r.Close()
+    r.Show()
+}
+```
+
+#### `duckframe.ReadCSVChunked(ctx context.Context, db *engine.DB, path string, chunkSize int) <-chan ChunkResult`
+
+Lê um CSV grande em chunks, enviando cada chunk como DataFrame por um canal. Suporta cancelamento via `context.Context`.
+
+```go
+ctx := context.Background()
+ch := duckframe.ReadCSVChunked(ctx, db, "big_data.csv", 10000)
+
+for chunk := range ch {
+    if chunk.Err != nil {
+        log.Fatal(chunk.Err)
+    }
+    defer chunk.DataFrame.Close()
+
+    // Processar cada chunk
+    fmt.Printf("Chunk %d: ", chunk.Index)
+    chunk.DataFrame.Show(3)
+}
+```
+
+#### Operações com Context
+
+Versões de operações que suportam `context.Context` para cancelamento e timeout:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+// Leitura com context
+df, err := duckframe.ReadCSVContext(ctx, db, "data.csv")
+
+// Query com context
+df, err := duckframe.FromQueryContext(ctx, db, "SELECT * FROM big_table")
+
+// Filter com context
+filtered, err := df.FilterContext(ctx, "salary > 90000")
+
+// Sort com context
+sorted, err := df.SortContext(ctx, "salary", false)
+```
+
+#### Pipeline: Chunked + Parallel
+
+Combine leitura chunked com processamento paralelo:
+
+```go
+ctx := context.Background()
+ch := duckframe.ReadCSVChunked(ctx, db, "big_data.csv", 5000)
+
+// Coletar chunks
+var chunks []*duckframe.DataFrame
+for chunk := range ch {
+    if chunk.Err != nil {
+        log.Fatal(chunk.Err)
+    }
+    chunks = append(chunks, chunk.DataFrame)
+}
+
+// Processar todos os chunks em paralelo
+results, err := duckframe.ParallelApply(chunks, func(df *duckframe.DataFrame) (*duckframe.DataFrame, error) {
+    return df.Filter("salary > 80000")
+})
+```
+
+#### Benchmarks
+
+Execute benchmarks para comparar operações sequenciais vs paralelas:
+
+```bash
+CGO_ENABLED=1 go test -bench=. -benchmem -run=^$ ./...
+```
+
+> **Nota:** DuckDB já possui execução vetorizada interna com paralelismo. O `ParallelApply` é mais útil quando se processa múltiplos DataFrames independentes, não para paralelizar uma única query.
+
+---
+
 > **Nota:** Este guia será expandido à medida que novas funcionalidades forem implementadas.
