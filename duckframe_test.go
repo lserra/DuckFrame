@@ -1115,3 +1115,526 @@ func TestWriteJSONErrorOnBadDF(t *testing.T) {
 		t.Fatal("expected error on WriteJSON with error DataFrame")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5 — Advanced Operations Tests
+// ---------------------------------------------------------------------------
+
+func TestSort(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	sorted, err := df.Sort("salary", true) // ascending
+	if err != nil {
+		t.Fatalf("Sort failed: %v", err)
+	}
+	defer sorted.Close()
+
+	var employees []Employee
+	err = sorted.ToSlice(&employees)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+
+	// Check that salaries are in ascending order
+	for i := 1; i < len(employees); i++ {
+		if employees[i].Salary < employees[i-1].Salary {
+			t.Fatalf("salaries not in ascending order at index %d: %.2f < %.2f",
+				i, employees[i].Salary, employees[i-1].Salary)
+		}
+	}
+}
+
+func TestSortDescending(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	sorted, err := df.Sort("salary", false) // descending
+	if err != nil {
+		t.Fatalf("Sort failed: %v", err)
+	}
+	defer sorted.Close()
+
+	var employees []Employee
+	err = sorted.ToSlice(&employees)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+
+	for i := 1; i < len(employees); i++ {
+		if employees[i].Salary > employees[i-1].Salary {
+			t.Fatalf("salaries not in descending order at index %d", i)
+		}
+	}
+}
+
+func TestLimit(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	limited, err := df.Limit(3)
+	if err != nil {
+		t.Fatalf("Limit failed: %v", err)
+	}
+	defer limited.Close()
+
+	r, _, err := limited.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 3 {
+		t.Fatalf("expected 3 rows, got %d", r)
+	}
+}
+
+func TestDistinct(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	// Create a DataFrame with duplicate rows
+	df, err := duckframe.FromQuery(db, "SELECT 'Alice' AS name, 30 AS age UNION ALL SELECT 'Alice', 30 UNION ALL SELECT 'Bob', 25")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df.Close()
+
+	unique, err := df.Distinct()
+	if err != nil {
+		t.Fatalf("Distinct failed: %v", err)
+	}
+	defer unique.Close()
+
+	r, _, err := unique.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 2 {
+		t.Fatalf("expected 2 distinct rows, got %d", r)
+	}
+}
+
+func TestRename(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	renamed, err := df.Rename("name", "employee_name")
+	if err != nil {
+		t.Fatalf("Rename failed: %v", err)
+	}
+	defer renamed.Close()
+
+	cols := renamed.Columns()
+	if cols[0] != "employee_name" {
+		t.Fatalf("expected first column to be 'employee_name', got %q", cols[0])
+	}
+	// Other columns should stay the same
+	if cols[1] != "age" || cols[2] != "country" || cols[3] != "salary" {
+		t.Fatalf("unexpected columns: %v", cols)
+	}
+}
+
+func TestDrop(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	dropped, err := df.Drop("country", "salary")
+	if err != nil {
+		t.Fatalf("Drop failed: %v", err)
+	}
+	defer dropped.Close()
+
+	cols := dropped.Columns()
+	if len(cols) != 2 {
+		t.Fatalf("expected 2 columns, got %d", len(cols))
+	}
+	if cols[0] != "name" || cols[1] != "age" {
+		t.Fatalf("expected [name, age], got %v", cols)
+	}
+}
+
+func TestDropAllColumnsError(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	_, err = df.Drop("name", "age", "country", "salary")
+	if err == nil {
+		t.Fatal("expected error when dropping all columns")
+	}
+}
+
+func TestWithColumnNew(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	withBonus, err := df.WithColumn("bonus", "salary * 0.10")
+	if err != nil {
+		t.Fatalf("WithColumn failed: %v", err)
+	}
+	defer withBonus.Close()
+
+	cols := withBonus.Columns()
+	if len(cols) != 5 {
+		t.Fatalf("expected 5 columns, got %d: %v", len(cols), cols)
+	}
+	if cols[4] != "bonus" {
+		t.Fatalf("expected last column to be 'bonus', got %q", cols[4])
+	}
+}
+
+func TestWithColumnReplace(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	// Replace salary with salary * 2
+	withDouble, err := df.WithColumn("salary", "salary * 2")
+	if err != nil {
+		t.Fatalf("WithColumn failed: %v", err)
+	}
+	defer withDouble.Close()
+
+	cols := withDouble.Columns()
+	if len(cols) != 4 {
+		t.Fatalf("expected 4 columns (replacement, not addition), got %d", len(cols))
+	}
+}
+
+func TestJoinInner(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	// Create two DataFrames
+	left, err := duckframe.FromQuery(db,
+		"SELECT 'Alice' AS name, 'Engineering' AS dept UNION ALL SELECT 'Bob', 'Marketing'")
+	if err != nil {
+		t.Fatalf("FromQuery left failed: %v", err)
+	}
+	defer left.Close()
+
+	right, err := duckframe.FromQuery(db,
+		"SELECT 'Engineering' AS dept, 100000 AS budget UNION ALL SELECT 'Marketing', 50000")
+	if err != nil {
+		t.Fatalf("FromQuery right failed: %v", err)
+	}
+	defer right.Close()
+
+	joined, err := left.Join(right, "dept", "inner")
+	if err != nil {
+		t.Fatalf("Join failed: %v", err)
+	}
+	defer joined.Close()
+
+	r, c, err := joined.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 2 {
+		t.Fatalf("expected 2 rows, got %d", r)
+	}
+	// left has name,dept; right has dept,budget; join removes right dept → name, dept, budget = 3
+	if c != 3 {
+		t.Fatalf("expected 3 columns, got %d: %v", c, joined.Columns())
+	}
+}
+
+func TestJoinLeft(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	left, err := duckframe.FromQuery(db,
+		"SELECT 'Alice' AS name, 'Engineering' AS dept UNION ALL SELECT 'Bob', 'Marketing' UNION ALL SELECT 'Carol', 'HR'")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer left.Close()
+
+	right, err := duckframe.FromQuery(db,
+		"SELECT 'Engineering' AS dept, 100000 AS budget UNION ALL SELECT 'Marketing', 50000")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer right.Close()
+
+	joined, err := left.Join(right, "dept", "left")
+	if err != nil {
+		t.Fatalf("Join failed: %v", err)
+	}
+	defer joined.Close()
+
+	r, _, err := joined.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 3 {
+		t.Fatalf("expected 3 rows (left join keeps all left rows), got %d", r)
+	}
+}
+
+func TestJoinInvalidType(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.FromQuery(db, "SELECT 1 AS id")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df.Close()
+
+	_, err = df.Join(df, "id", "cross")
+	if err == nil {
+		t.Fatal("expected error for unsupported join type")
+	}
+}
+
+func TestUnion(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df1, err := duckframe.FromQuery(db, "SELECT 'Alice' AS name, 30 AS age")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df1.Close()
+
+	df2, err := duckframe.FromQuery(db, "SELECT 'Bob' AS name, 25 AS age")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df2.Close()
+
+	unioned, err := df1.Union(df2)
+	if err != nil {
+		t.Fatalf("Union failed: %v", err)
+	}
+	defer unioned.Close()
+
+	r, _, err := unioned.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 2 {
+		t.Fatalf("expected 2 rows, got %d", r)
+	}
+}
+
+func TestHead(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	head, err := df.Head(3)
+	if err != nil {
+		t.Fatalf("Head failed: %v", err)
+	}
+	defer head.Close()
+
+	r, _, err := head.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 3 {
+		t.Fatalf("expected 3 rows, got %d", r)
+	}
+}
+
+func TestTail(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	tail, err := df.Tail(2)
+	if err != nil {
+		t.Fatalf("Tail failed: %v", err)
+	}
+	defer tail.Close()
+
+	r, _, err := tail.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 2 {
+		t.Fatalf("expected 2 rows, got %d", r)
+	}
+}
+
+func TestDtypes(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	dtypes, err := df.Dtypes()
+	if err != nil {
+		t.Fatalf("Dtypes failed: %v", err)
+	}
+
+	if len(dtypes) != 4 {
+		t.Fatalf("expected 4 column types, got %d", len(dtypes))
+	}
+
+	// name should be VARCHAR, age/salary should be numeric
+	if dtypes["name"] != "VARCHAR" {
+		t.Fatalf("expected name type VARCHAR, got %q", dtypes["name"])
+	}
+}
+
+func TestDescribe(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	desc, err := df.Describe()
+	if err != nil {
+		t.Fatalf("Describe failed: %v", err)
+	}
+	defer desc.Close()
+
+	// Should have columns: column, count, mean, std, min, max
+	cols := desc.Columns()
+	if len(cols) != 6 {
+		t.Fatalf("expected 6 stat columns, got %d: %v", len(cols), cols)
+	}
+
+	// employees.csv has 2 numeric columns: age and salary
+	r, _, err := desc.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 2 {
+		t.Fatalf("expected 2 rows (one per numeric column), got %d", r)
+	}
+}
+
+func TestDescribeNoNumericColumns(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.FromQuery(db, "SELECT 'Alice' AS name, 'USA' AS country")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df.Close()
+
+	_, err = df.Describe()
+	if err == nil {
+		t.Fatal("expected error when Describe has no numeric columns")
+	}
+}
+
+func TestSortChained(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	if err != nil {
+		t.Fatalf("ReadCSV failed: %v", err)
+	}
+	defer df.Close()
+
+	// Chain: filter -> sort -> limit
+	result, err := df.Filter("salary > 60000")
+	if err != nil {
+		t.Fatalf("Filter failed: %v", err)
+	}
+	defer result.Close()
+
+	sorted, err := result.Sort("salary", false) // desc
+	if err != nil {
+		t.Fatalf("Sort failed: %v", err)
+	}
+	defer sorted.Close()
+
+	top3, err := sorted.Limit(3)
+	if err != nil {
+		t.Fatalf("Limit failed: %v", err)
+	}
+	defer top3.Close()
+
+	r, _, err := top3.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 3 {
+		t.Fatalf("expected 3 rows, got %d", r)
+	}
+
+	var employees []Employee
+	err = top3.ToSlice(&employees)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+
+	// Should be top 3 salaries in descending order
+	for i := 1; i < len(employees); i++ {
+		if employees[i].Salary > employees[i-1].Salary {
+			t.Fatalf("expected descending salaries, index %d: %.0f > %.0f",
+				i, employees[i].Salary, employees[i-1].Salary)
+		}
+	}
+}

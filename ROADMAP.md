@@ -47,19 +47,19 @@
 - [x] Testes para leitura/escrita de cada formato
 
 ## Fase 5 — Operações Avançadas
-- [ ] `Sort(col string, asc bool) *DataFrame`
-- [ ] `Limit(n int) *DataFrame`
-- [ ] `Distinct() *DataFrame`
-- [ ] `Rename(old, new string) *DataFrame`
-- [ ] `Drop(cols ...string) *DataFrame`
-- [ ] `WithColumn(name string, expr string) *DataFrame`
-- [ ] `Join(other *DataFrame, on string, how string) *DataFrame`
-- [ ] `Union(other *DataFrame) *DataFrame`
-- [ ] `Head(n int) *DataFrame` / `Tail(n int) *DataFrame`
-- [ ] `Shape() (rows int, cols int)`
-- [ ] `Columns() []string`
-- [ ] `Dtypes() map[string]string`
-- [ ] `Describe() *DataFrame` — estatísticas descritivas
+- [x] `Sort(col string, asc bool) (*DataFrame, error)`
+- [x] `Limit(n int) (*DataFrame, error)`
+- [x] `Distinct() (*DataFrame, error)`
+- [x] `Rename(old, new string) (*DataFrame, error)`
+- [x] `Drop(cols ...string) (*DataFrame, error)`
+- [x] `WithColumn(name string, expr string) (*DataFrame, error)`
+- [x] `Join(other *DataFrame, on string, how string) (*DataFrame, error)` — inner, left, right, full
+- [x] `Union(other *DataFrame) (*DataFrame, error)`
+- [x] `Head(n int) (*DataFrame, error)` / `Tail(n int) (*DataFrame, error)`
+- [x] `Shape() (rows int, cols int)` — já existia (Fase 1)
+- [x] `Columns() []string` — já existia (Fase 1)
+- [x] `Dtypes() (map[string]string, error)`
+- [x] `Describe() (*DataFrame, error)` — estatísticas descritivas (count, mean, std, min, max)
 
 ## Fase 6 — Concorrência e Streaming
 - [ ] Pipeline concorrente: processar múltiplos DataFrames em paralelo

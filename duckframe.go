@@ -669,3 +669,255 @@ func (df *DataFrame) WriteJSON(path string) error {
 	}
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5 — Advanced Operations
+// ---------------------------------------------------------------------------
+
+// Sort returns a new DataFrame sorted by the given column.
+// If asc is true, sorts ascending; otherwise descending.
+func (df *DataFrame) Sort(col string, asc bool) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	order := "ASC"
+	if !asc {
+		order = "DESC"
+	}
+	query := fmt.Sprintf("SELECT * FROM %s ORDER BY %q %s", df.tableName, col, order)
+	return FromQuery(df.db, query)
+}
+
+// Limit returns a new DataFrame with at most n rows.
+func (df *DataFrame) Limit(n int) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT %d", df.tableName, n)
+	return FromQuery(df.db, query)
+}
+
+// Distinct returns a new DataFrame with duplicate rows removed.
+func (df *DataFrame) Distinct() (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	query := fmt.Sprintf("SELECT DISTINCT * FROM %s", df.tableName)
+	return FromQuery(df.db, query)
+}
+
+// Rename returns a new DataFrame with a column renamed.
+func (df *DataFrame) Rename(oldName, newName string) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	parts := make([]string, len(df.columns))
+	for i, col := range df.columns {
+		if col == oldName {
+			parts[i] = fmt.Sprintf("%q AS %q", col, newName)
+		} else {
+			parts[i] = fmt.Sprintf("%q", col)
+		}
+	}
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(parts, ", "), df.tableName)
+	return FromQuery(df.db, query)
+}
+
+// Drop returns a new DataFrame without the specified columns.
+func (df *DataFrame) Drop(cols ...string) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	dropSet := make(map[string]bool, len(cols))
+	for _, c := range cols {
+		dropSet[c] = true
+	}
+	var kept []string
+	for _, col := range df.columns {
+		if !dropSet[col] {
+			kept = append(kept, fmt.Sprintf("%q", col))
+		}
+	}
+	if len(kept) == 0 {
+		return nil, fmt.Errorf("duckframe: Drop would remove all columns")
+	}
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(kept, ", "), df.tableName)
+	return FromQuery(df.db, query)
+}
+
+// WithColumn returns a new DataFrame with an added or replaced column
+// defined by a SQL expression.
+func (df *DataFrame) WithColumn(name string, expr string) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	parts := make([]string, 0, len(df.columns)+1)
+	replaced := false
+	for _, col := range df.columns {
+		if col == name {
+			parts = append(parts, fmt.Sprintf("(%s) AS %q", expr, name))
+			replaced = true
+		} else {
+			parts = append(parts, fmt.Sprintf("%q", col))
+		}
+	}
+	if !replaced {
+		parts = append(parts, fmt.Sprintf("(%s) AS %q", expr, name))
+	}
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(parts, ", "), df.tableName)
+	return FromQuery(df.db, query)
+}
+
+// Join joins this DataFrame with another on the specified column.
+// how can be: "inner", "left", "right", "full".
+func (df *DataFrame) Join(other *DataFrame, on string, how string) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	if other.err != nil {
+		return errDF(df.db, other.err), other.err
+	}
+
+	howUpper := strings.ToUpper(how)
+	validJoins := map[string]bool{"INNER": true, "LEFT": true, "RIGHT": true, "FULL": true}
+	if !validJoins[howUpper] {
+		return nil, fmt.Errorf("duckframe: unsupported join type %q", how)
+	}
+
+	// Build column list avoiding ambiguity: qualify all columns
+	var selectCols []string
+	otherColSet := make(map[string]bool)
+	for _, col := range other.columns {
+		otherColSet[col] = true
+	}
+
+	for _, col := range df.columns {
+		selectCols = append(selectCols, fmt.Sprintf("a.%q", col))
+	}
+	for _, col := range other.columns {
+		if col == on {
+			continue // skip the join key from the right side
+		}
+		alias := col
+		// If column name conflicts, prefix with right table
+		for _, lcol := range df.columns {
+			if lcol == col {
+				alias = "right_" + col
+				break
+			}
+		}
+		selectCols = append(selectCols, fmt.Sprintf("b.%q AS %q", col, alias))
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s a %s JOIN %s b ON a.%q = b.%q",
+		strings.Join(selectCols, ", "),
+		df.tableName, howUpper, other.tableName,
+		on, on,
+	)
+	return FromQuery(df.db, query)
+}
+
+// Union returns a new DataFrame that appends the rows of other to this DataFrame.
+// Both DataFrames must have the same columns.
+func (df *DataFrame) Union(other *DataFrame) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	if other.err != nil {
+		return errDF(df.db, other.err), other.err
+	}
+	query := fmt.Sprintf("SELECT * FROM %s UNION ALL SELECT * FROM %s", df.tableName, other.tableName)
+	return FromQuery(df.db, query)
+}
+
+// Head returns a new DataFrame with the first n rows.
+func (df *DataFrame) Head(n int) (*DataFrame, error) {
+	return df.Limit(n)
+}
+
+// Tail returns a new DataFrame with the last n rows.
+// Note: order depends on the underlying table order.
+func (df *DataFrame) Tail(n int) (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+	totalRows, _, err := df.Shape()
+	if err != nil {
+		return errDF(df.db, err), err
+	}
+	offset := totalRows - n
+	if offset < 0 {
+		offset = 0
+	}
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT %d OFFSET %d", df.tableName, n, offset)
+	return FromQuery(df.db, query)
+}
+
+// Dtypes returns a map of column names to their DuckDB data types.
+func (df *DataFrame) Dtypes() (map[string]string, error) {
+	if df.err != nil {
+		return nil, df.err
+	}
+	query := fmt.Sprintf("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '%s'", df.tableName)
+	rows, err := df.db.Conn().Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("duckframe: Dtypes query failed: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var colName, dataType string
+		if err := rows.Scan(&colName, &dataType); err != nil {
+			return nil, fmt.Errorf("duckframe: Dtypes scan failed: %w", err)
+		}
+		result[colName] = dataType
+	}
+	return result, nil
+}
+
+// Describe returns a new DataFrame with descriptive statistics
+// (count, mean, min, max, std) for all numeric columns.
+func (df *DataFrame) Describe() (*DataFrame, error) {
+	if df.err != nil {
+		return errDF(df.db, df.err), df.err
+	}
+
+	// Get numeric column types
+	dtypes, err := df.Dtypes()
+	if err != nil {
+		return errDF(df.db, err), err
+	}
+
+	var numericCols []string
+	for _, col := range df.columns {
+		dt := strings.ToUpper(dtypes[col])
+		if strings.Contains(dt, "INT") || strings.Contains(dt, "FLOAT") ||
+			strings.Contains(dt, "DOUBLE") || strings.Contains(dt, "DECIMAL") ||
+			strings.Contains(dt, "NUMERIC") || strings.Contains(dt, "BIGINT") ||
+			strings.Contains(dt, "SMALLINT") || strings.Contains(dt, "TINYINT") {
+			numericCols = append(numericCols, col)
+		}
+	}
+
+	if len(numericCols) == 0 {
+		return nil, fmt.Errorf("duckframe: Describe requires at least one numeric column")
+	}
+
+	// Build UNION ALL of stats for each numeric column
+	var parts []string
+	for _, col := range numericCols {
+		q := fmt.Sprintf(
+			"SELECT '%s' AS \"column\", COUNT(%q) AS \"count\", "+
+				"ROUND(AVG(%q), 4) AS \"mean\", "+
+				"ROUND(STDDEV(%q), 4) AS \"std\", "+
+				"MIN(%q) AS \"min\", "+
+				"MAX(%q) AS \"max\" FROM %s",
+			col, col, col, col, col, col, df.tableName,
+		)
+		parts = append(parts, q)
+	}
+
+	query := strings.Join(parts, " UNION ALL ")
+	return FromQuery(df.db, query)
+}

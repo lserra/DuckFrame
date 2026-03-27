@@ -413,4 +413,132 @@ filtered.WriteParquet("high_salary.parquet")
 
 ---
 
+### Operações Avançadas
+
+#### `(*DataFrame).Sort(col string, asc bool) (*DataFrame, error)`
+
+Retorna um novo DataFrame ordenado pela coluna especificada.
+
+```go
+sorted, err := df.Sort("salary", true)   // ascendente
+sorted, err := df.Sort("salary", false)  // descendente
+```
+
+#### `(*DataFrame).Limit(n int) (*DataFrame, error)`
+
+Retorna um novo DataFrame com no máximo `n` linhas.
+
+```go
+top5, err := df.Limit(5)
+```
+
+#### `(*DataFrame).Distinct() (*DataFrame, error)`
+
+Remove linhas duplicadas.
+
+```go
+unique, err := df.Distinct()
+```
+
+#### `(*DataFrame).Rename(oldName, newName string) (*DataFrame, error)`
+
+Renomeia uma coluna.
+
+```go
+renamed, err := df.Rename("name", "employee_name")
+```
+
+#### `(*DataFrame).Drop(cols ...string) (*DataFrame, error)`
+
+Remove as colunas especificadas.
+
+```go
+reduced, err := df.Drop("country", "salary")
+```
+
+#### `(*DataFrame).WithColumn(name, expr string) (*DataFrame, error)`
+
+Adiciona ou substitui uma coluna usando uma expressão SQL.
+
+```go
+// Nova coluna calculada
+withBonus, err := df.WithColumn("bonus", "salary * 0.10")
+
+// Substituir coluna existente
+doubled, err := df.WithColumn("salary", "salary * 2")
+```
+
+#### `(*DataFrame).Join(other *DataFrame, on, how string) (*DataFrame, error)`
+
+Faz JOIN com outro DataFrame. Tipos suportados: `inner`, `left`, `right`, `full`.
+
+```go
+joined, err := employees.Join(departments, "dept_id", "inner")
+```
+
+Colunas com nomes conflitantes recebem o prefixo `right_`.
+
+#### `(*DataFrame).Union(other *DataFrame) (*DataFrame, error)`
+
+Combina dois DataFrames com as mesmas colunas (UNION ALL).
+
+```go
+combined, err := df1.Union(df2)
+```
+
+#### `(*DataFrame).Head(n int) (*DataFrame, error)`
+
+Retorna as primeiras `n` linhas.
+
+```go
+first3, err := df.Head(3)
+```
+
+#### `(*DataFrame).Tail(n int) (*DataFrame, error)`
+
+Retorna as últimas `n` linhas.
+
+```go
+last3, err := df.Tail(3)
+```
+
+#### `(*DataFrame).Dtypes() (map[string]string, error)`
+
+Retorna os tipos de dados de cada coluna.
+
+```go
+dtypes, err := df.Dtypes()
+// map[name:VARCHAR age:BIGINT country:VARCHAR salary:DOUBLE]
+```
+
+#### `(*DataFrame).Describe() (*DataFrame, error)`
+
+Retorna estatísticas descritivas (count, mean, std, min, max) para colunas numéricas.
+
+```go
+stats, err := df.Describe()
+stats.Show()
+```
+
+Saída:
+```
+DataFrame [2 rows x 6 cols]
+column   count   mean      std       min      max
+-------  ------  --------  --------  -------  --------
+age      7       31.0      5.0990    25       40
+salary   7       83857.28  12345.67  68000    102000
+```
+
+#### Pipeline encadeado: Filter → Sort → Limit
+
+```go
+// Top 3 maiores salários acima de 60k
+top3, err := df.Filter("salary > 60000")
+sorted, err := top3.Sort("salary", false)
+result, err := sorted.Limit(3)
+result.Show()
+```
+
+---
+
 > **Nota:** Este guia será expandido à medida que novas funcionalidades forem implementadas.
