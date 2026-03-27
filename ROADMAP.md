@@ -77,12 +77,12 @@
 - [x] `mapSQLTypeToDuck()` — mapeamento de tipos database/sql → DuckDB
 
 ## Fase 8 — Qualidade e Ecossistema Go
-- [ ] Cobertura de testes ≥ 80%
-- [ ] `go vet` sem warnings
-- [ ] `golangci-lint` configurado e limpo
-- [ ] `go doc` — documentação exportada em todas as funções públicas
-- [ ] `go generate` para código gerado (se aplicável)
-- [ ] Exemplos em `_example_test.go`
+- [x] Cobertura de testes ≥ 80% (80.6% duckframe, 117 testes)
+- [x] `go vet` sem warnings
+- [x] `golangci-lint` configurado e limpo (errcheck, govet, staticcheck, unused, ineffassign, gocritic, misspell)
+- [x] `go doc` — documentação exportada em todas as funções públicas
+- [ ] `go generate` para código gerado — N/A (sem código gerado)
+- [x] Exemplos em `example_test.go` (ExampleNew, ExampleReadCSV, ExampleDataFrame_Filter/Sort/GroupBy/Join/Describe)
 - [ ] Godoc publicado
 
 ## Fase 9 — Documentação e Exemplos

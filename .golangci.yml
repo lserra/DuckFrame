@@ -1,0 +1,29 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - gocritic
+    - misspell
+  exclusions:
+    rules:
+      - path: _test\.go$
+        linters:
+          - errcheck
+      - path: examples/
+        linters:
+          - errcheck
+          - gocritic
+
+formatters:
+  enable:
+    - gofmt
+
+output:
+  formats:
+    text:
+      path: stdout

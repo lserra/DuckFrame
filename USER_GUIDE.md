@@ -710,4 +710,54 @@ grouped.Show()
 
 ---
 
+### Qualidade e Ferramentas
+
+#### Testes e Cobertura
+
+```bash
+# Rodar todos os testes
+CGO_ENABLED=1 go test -v ./...
+
+# Coverage com relatório
+CGO_ENABLED=1 go test -coverprofile=coverage.out ./...
+go tool cover -func=coverage.out          # por função
+go tool cover -html=coverage.out           # relatório HTML
+```
+
+**Status atual:** 117 testes, 80.6% de cobertura no pacote duckframe.
+
+#### Análise Estática
+
+```bash
+# go vet — detecção de bugs comuns
+go vet ./...
+
+# golangci-lint — linter completo
+golangci-lint run ./...
+```
+
+**Linters habilitados:** errcheck, govet, staticcheck, unused, ineffassign, gocritic, misspell.
+
+Configuração em `.golangci.yml` na raiz do projeto.
+
+#### Exemplos Executáveis (godoc)
+
+O arquivo `example_test.go` contém exemplos que aparecem automaticamente na documentação gerada pelo `go doc`:
+
+- `ExampleNew` — criação de DataFrame a partir de dados
+- `ExampleReadCSV` — leitura de CSV
+- `ExampleDataFrame_Filter` — filtragem
+- `ExampleDataFrame_Sort` — ordenação
+- `ExampleDataFrame_GroupBy` — agrupamento
+- `ExampleDataFrame_Join` — join entre DataFrames
+- `ExampleDataFrame_Describe` — estatísticas descritivas
+
+```bash
+# Visualizar documentação
+go doc github.com/lserra/duckframe
+go doc github.com/lserra/duckframe DataFrame.Filter
+```
+
+---
+
 > **Nota:** Este guia será expandido à medida que novas funcionalidades forem implementadas.

@@ -1754,11 +1754,12 @@ func TestReadCSVChunked(t *testing.T) {
 
 	var totalRows int
 	var chunkCount int
+	var chunkDFs []*duckframe.DataFrame
 	for chunk := range ch {
 		if chunk.Err != nil {
 			t.Fatalf("chunk %d error: %v", chunk.Index, chunk.Err)
 		}
-		defer chunk.DataFrame.Close()
+		chunkDFs = append(chunkDFs, chunk.DataFrame)
 
 		r, _, err := chunk.DataFrame.Shape()
 		if err != nil {
@@ -1766,6 +1767,9 @@ func TestReadCSVChunked(t *testing.T) {
 		}
 		totalRows += r
 		chunkCount++
+	}
+	for _, cdf := range chunkDFs {
+		cdf.Close()
 	}
 
 	// employees.csv has 7 rows, chunk size 3 → 3 chunks (3+3+1)
@@ -1926,8 +1930,12 @@ func TestChunkedProcessing(t *testing.T) {
 			t.Fatalf("chunk error: %v", chunk.Err)
 		}
 		chunks = append(chunks, chunk.DataFrame)
-		defer chunk.DataFrame.Close()
 	}
+	defer func() {
+		for _, c := range chunks {
+			c.Close()
+		}
+	}()
 
 	// Apply filter in parallel to all chunks
 	filterFn := func(df *duckframe.DataFrame) (*duckframe.DataFrame, error) {
@@ -2187,5 +2195,547 @@ func TestReadMySQLNoServer(t *testing.T) {
 	_, err := duckframe.ReadMySQL(db, "host=localhost port=1 user=none database=none", "test_table")
 	if err == nil {
 		t.Fatal("expected error when connecting to non-existent MySQL")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8 — Coverage boosting tests
+// ---------------------------------------------------------------------------
+
+func TestToSliceWithNumericConversions(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	// Create DataFrame with various numeric types (cast to avoid DuckDB Decimal)
+	df, err := duckframe.FromQuery(db,
+		"SELECT 42 AS int_val, 3.14::DOUBLE AS float_val, true AS bool_val, 'hello' AS str_val")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df.Close()
+
+	type Row struct {
+		IntVal   int64   `df:"int_val"`
+		FloatVal float64 `df:"float_val"`
+		BoolVal  bool    `df:"bool_val"`
+		StrVal   string  `df:"str_val"`
+	}
+
+	var rows []Row
+	err = df.ToSlice(&rows)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	if rows[0].IntVal != 42 {
+		t.Fatalf("expected int 42, got %d", rows[0].IntVal)
+	}
+	if rows[0].FloatVal != 3.14 {
+		t.Fatalf("expected float 3.14, got %f", rows[0].FloatVal)
+	}
+	if rows[0].BoolVal != true {
+		t.Fatalf("expected bool true, got %v", rows[0].BoolVal)
+	}
+	if rows[0].StrVal != "hello" {
+		t.Fatalf("expected string 'hello', got %q", rows[0].StrVal)
+	}
+}
+
+func TestToSliceFloat64ToInt(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	// Double column mapped to int field
+	df, err := duckframe.FromQuery(db, "SELECT 99.0::DOUBLE AS val")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df.Close()
+
+	type Row struct {
+		Val int64 `df:"val"`
+	}
+
+	var rows []Row
+	err = df.ToSlice(&rows)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+	if rows[0].Val != 99 {
+		t.Fatalf("expected 99, got %d", rows[0].Val)
+	}
+}
+
+func TestToSliceInt64ToFloat(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.FromQuery(db, "SELECT 42::BIGINT AS val")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df.Close()
+
+	type Row struct {
+		Val float64 `df:"val"`
+	}
+
+	var rows []Row
+	err = df.ToSlice(&rows)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+	if rows[0].Val != 42.0 {
+		t.Fatalf("expected 42.0, got %f", rows[0].Val)
+	}
+}
+
+func TestToSliceInt32Conversion(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.FromQuery(db, "SELECT 7::INTEGER AS val")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df.Close()
+
+	type Row struct {
+		Val int64 `df:"val"`
+	}
+
+	var rows []Row
+	err = df.ToSlice(&rows)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+	if rows[0].Val != 7 {
+		t.Fatalf("expected 7, got %d", rows[0].Val)
+	}
+}
+
+func TestToSliceStringConversion(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	// Test that numeric values can be mapped to string fields
+	df, err := duckframe.FromQuery(db, "SELECT 123 AS val")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df.Close()
+
+	type Row struct {
+		Val string `df:"val"`
+	}
+
+	var rows []Row
+	err = df.ToSlice(&rows)
+	if err != nil {
+		t.Fatalf("ToSlice failed: %v", err)
+	}
+	if rows[0].Val == "" {
+		t.Fatal("expected non-empty string")
+	}
+}
+
+func TestLimitOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	limited, _ := badDF.Limit(5)
+	if limited.Err() == nil {
+		t.Fatal("expected error propagation on Limit")
+	}
+}
+
+func TestDistinctOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	unique, _ := badDF.Distinct()
+	if unique.Err() == nil {
+		t.Fatal("expected error propagation on Distinct")
+	}
+}
+
+func TestUnionOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+
+	// Error in left DF
+	_, err := badDF.Union(df)
+	if err == nil {
+		t.Fatal("expected error from left-side error DF")
+	}
+
+	// Error in right DF
+	_, err = df.Union(badDF)
+	if err == nil {
+		t.Fatal("expected error from right-side error DF")
+	}
+}
+
+func TestTailOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	tail, _ := badDF.Tail(3)
+	if tail.Err() == nil {
+		t.Fatal("expected error propagation on Tail")
+	}
+}
+
+func TestTailMoreThanRows(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, err := duckframe.FromQuery(db, "SELECT 1 AS id UNION ALL SELECT 2")
+	if err != nil {
+		t.Fatalf("FromQuery failed: %v", err)
+	}
+	defer df.Close()
+
+	tail, err := df.Tail(10) // more than available rows
+	if err != nil {
+		t.Fatalf("Tail failed: %v", err)
+	}
+	defer tail.Close()
+
+	r, _, _ := tail.Shape()
+	if r != 2 {
+		t.Fatalf("expected 2 rows (all), got %d", r)
+	}
+}
+
+func TestDtypesOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	_, err := badDF.Dtypes()
+	if err == nil {
+		t.Fatal("expected error from Dtypes on error DF")
+	}
+}
+
+func TestDescribeOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	_, err := badDF.Describe()
+	if err == nil {
+		t.Fatal("expected error from Describe on error DF")
+	}
+}
+
+func TestReadFromDBWithTypes(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	extDB := db.Conn()
+	// Test various column types for mapSQLTypeToDuck coverage
+	_, err := extDB.Exec(`CREATE TABLE ext_typed (
+		id INTEGER,
+		big_id BIGINT,
+		small_id SMALLINT,
+		price DOUBLE,
+		rate FLOAT,
+		amount DECIMAL(10,2),
+		name VARCHAR,
+		label TEXT,
+		active BOOLEAN,
+		data BLOB,
+		created DATE,
+		updated TIMESTAMP,
+		event_time TIME
+	)`)
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	_, err = extDB.Exec(`INSERT INTO ext_typed VALUES (
+		1, 999999, 5, 19.99, 3.14, 100.50, 'Widget', 'A label', true,
+		'\x0102'::BLOB, '2024-01-15', '2024-01-15 10:30:00', '14:30:00'
+	)`)
+	if err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	// Cast DECIMAL to DOUBLE to avoid duckdb.Decimal struct issue in re-insert
+	df, err := duckframe.ReadFromDB(db, extDB, "SELECT id, big_id, small_id, price, rate, CAST(amount AS DOUBLE) AS amount, name, label, active, data, created, updated, event_time FROM ext_typed")
+	if err != nil {
+		t.Fatalf("ReadFromDB failed: %v", err)
+	}
+	defer df.Close()
+
+	r, c, err := df.Shape()
+	if err != nil {
+		t.Fatalf("Shape failed: %v", err)
+	}
+	if r != 1 {
+		t.Fatalf("expected 1 row, got %d", r)
+	}
+	if c != 13 {
+		t.Fatalf("expected 13 columns, got %d", c)
+	}
+}
+
+func TestSqlOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	_, err := badDF.Sql("SELECT * FROM {df}")
+	if err == nil {
+		t.Fatal("expected error from Sql on error DF")
+	}
+}
+
+func TestCollectOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	_, err := badDF.Collect()
+	if err == nil {
+		t.Fatal("expected error from Collect on error DF")
+	}
+}
+
+func TestShowOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	err := badDF.Show()
+	if err == nil {
+		t.Fatal("expected error from Show on error DF")
+	}
+}
+
+func TestHeadOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	head, _ := badDF.Head(3)
+	if head.Err() == nil {
+		t.Fatal("expected error propagation on Head")
+	}
+}
+
+func TestSortOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	sorted, _ := badDF.Sort("salary", true)
+	if sorted.Err() == nil {
+		t.Fatal("expected error propagation on Sort")
+	}
+}
+
+func TestRenameOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	renamed, _ := badDF.Rename("name", "x")
+	if renamed.Err() == nil {
+		t.Fatal("expected error propagation on Rename")
+	}
+}
+
+func TestDropOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	dropped, _ := badDF.Drop("name")
+	if dropped.Err() == nil {
+		t.Fatal("expected error propagation on Drop")
+	}
+}
+
+func TestWithColumnOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	wc, _ := badDF.WithColumn("x", "1")
+	if wc.Err() == nil {
+		t.Fatal("expected error propagation on WithColumn")
+	}
+}
+
+func TestJoinOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+
+	// Left side error
+	joined, _ := badDF.Join(df, "name", "inner")
+	if joined.Err() == nil {
+		t.Fatal("expected error from left-side error DF")
+	}
+
+	// Right side error
+	joined2, _ := df.Join(badDF, "name", "inner")
+	if joined2.Err() == nil {
+		t.Fatal("expected error from right-side error DF")
+	}
+}
+
+func TestSelectOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	selected, _ := badDF.Select("name")
+	if selected.Err() == nil {
+		t.Fatal("expected error propagation on Select")
+	}
+}
+
+func TestFilterOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	filtered, _ := badDF.Filter("salary > 0")
+	if filtered.Err() == nil {
+		t.Fatal("expected error propagation on Filter")
+	}
+}
+
+func TestWriteCSVOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	err := badDF.WriteCSV("/tmp/err.csv")
+	if err == nil {
+		t.Fatal("expected error on WriteCSV with error DF")
+	}
+}
+
+func TestWriteParquetOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	err := badDF.WriteParquet("/tmp/err.parquet")
+	if err == nil {
+		t.Fatal("expected error on WriteParquet with error DF")
+	}
+}
+
+func TestWriteJSONOnErrorDF2(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	err := badDF.WriteJSON("/tmp/err.json")
+	if err == nil {
+		t.Fatal("expected error on WriteJSON with error DF")
+	}
+}
+
+func TestFilterContextOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	ctx := context.Background()
+	filtered, _ := badDF.FilterContext(ctx, "salary > 0")
+	if filtered.Err() == nil {
+		t.Fatal("expected error propagation on FilterContext")
+	}
+}
+
+func TestSortContextOnErrorDF(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	df, _ := duckframe.ReadCSV(db, testdataPath("employees.csv"))
+	defer df.Close()
+
+	badDF, _ := df.Filter("INVALID!!!")
+	ctx := context.Background()
+	sorted, _ := badDF.SortContext(ctx, "salary", true)
+	if sorted.Err() == nil {
+		t.Fatal("expected error propagation on SortContext")
 	}
 }

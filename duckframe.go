@@ -82,7 +82,7 @@ func New(db *engine.DB, columns []string, rows []map[string]interface{}) (*DataF
 		if err != nil {
 			return nil, fmt.Errorf("duckframe: failed to prepare insert: %w", err)
 		}
-		defer stmt.Close()
+		defer func() { _ = stmt.Close() }()
 
 		for _, row := range rows {
 			vals := make([]interface{}, len(columns))
@@ -123,21 +123,6 @@ func FromQuery(db *engine.DB, query string) (*DataFrame, error) {
 		tableName: tableName,
 		columns:   cols,
 		owned:     true,
-	}, nil
-}
-
-// fromTable wraps an existing table/view name as a DataFrame (does not own it).
-func fromTable(db *engine.DB, tableName string) (*DataFrame, error) {
-	cols, err := queryColumns(db.Conn(), tableName)
-	if err != nil {
-		return nil, err
-	}
-
-	return &DataFrame{
-		db:        db,
-		tableName: tableName,
-		columns:   cols,
-		owned:     false,
 	}, nil
 }
 
@@ -190,7 +175,7 @@ func queryColumns(conn *sql.DB, tableName string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("duckframe: failed to query columns: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	cols, err := rows.Columns()
 	if err != nil {
@@ -334,7 +319,7 @@ func (df *DataFrame) Show(maxRows ...int) error {
 	if err != nil {
 		return fmt.Errorf("duckframe: failed to query for Show: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	cols, err := rows.Columns()
 	if err != nil {
@@ -347,14 +332,14 @@ func (df *DataFrame) Show(maxRows ...int) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
 	// Header
-	fmt.Fprintln(w, strings.Join(cols, "\t"))
+	_, _ = fmt.Fprintln(w, strings.Join(cols, "\t"))
 
 	// Separator
 	seps := make([]string, len(cols))
 	for i, col := range cols {
 		seps[i] = strings.Repeat("-", len(col)+2)
 	}
-	fmt.Fprintln(w, strings.Join(seps, "\t"))
+	_, _ = fmt.Fprintln(w, strings.Join(seps, "\t"))
 
 	// Rows
 	values := make([]interface{}, len(cols))
@@ -372,11 +357,11 @@ func (df *DataFrame) Show(maxRows ...int) error {
 		for i, v := range values {
 			strs[i] = fmt.Sprintf("%v", v)
 		}
-		fmt.Fprintln(w, strings.Join(strs, "\t"))
+		_, _ = fmt.Fprintln(w, strings.Join(strs, "\t"))
 		printed++
 	}
 
-	w.Flush()
+	_ = w.Flush()
 
 	if totalRows > printed {
 		fmt.Printf("... (%d more rows)\n", totalRows-printed)
@@ -411,7 +396,7 @@ func (df *DataFrame) Collect() ([]map[string]interface{}, error) {
 	if err != nil {
 		return nil, fmt.Errorf("duckframe: Collect query failed: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	cols, err := rows.Columns()
 	if err != nil {
@@ -483,7 +468,7 @@ func (df *DataFrame) ToSlice(dest interface{}) error {
 	if err != nil {
 		return fmt.Errorf("duckframe: ToSlice query failed: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	cols, err := rows.Columns()
 	if err != nil {
@@ -865,7 +850,7 @@ func (df *DataFrame) Dtypes() (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("duckframe: Dtypes query failed: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[string]string)
 	for rows.Next() {
@@ -955,7 +940,7 @@ func ParallelApply(dfs []*DataFrame, fn ApplyFunc) ([]*DataFrame, error) {
 			// Clean up any successfully created DataFrames
 			for j, r := range results {
 				if j != i && r != nil {
-					r.Close()
+					_ = r.Close()
 				}
 			}
 			return nil, fmt.Errorf("duckframe: ParallelApply failed on DataFrame %d: %w", i, err)
@@ -1025,7 +1010,7 @@ func FromQueryContext(ctx context.Context, db *engine.DB, query string) (*DataFr
 
 	columns, err := queryColumnsCtx(ctx, db, tableName)
 	if err != nil {
-		db.Conn().ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName))
+		_, _ = db.Conn().ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName))
 		return nil, err
 	}
 
@@ -1066,7 +1051,7 @@ func queryColumnsCtx(ctx context.Context, db *engine.DB, tableName string) ([]st
 	if err != nil {
 		return nil, fmt.Errorf("duckframe: failed to query columns: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	cols, err := rows.Columns()
 	if err != nil {
@@ -1116,7 +1101,7 @@ func ReadPostgres(db *engine.DB, dsn string, query string) (*DataFrame, error) {
 	if _, err := db.Conn().Exec(attachSQL); err != nil {
 		return nil, fmt.Errorf("duckframe: failed to attach postgres: %w", err)
 	}
-	defer db.Conn().Exec(fmt.Sprintf("DETACH %s", attachName))
+	defer func() { _, _ = db.Conn().Exec(fmt.Sprintf("DETACH %s", attachName)) }()
 
 	// If query is just a table name (no spaces), select from it directly
 	selectQuery := query
@@ -1140,7 +1125,7 @@ func ReadMySQL(db *engine.DB, dsn string, query string) (*DataFrame, error) {
 	if _, err := db.Conn().Exec(attachSQL); err != nil {
 		return nil, fmt.Errorf("duckframe: failed to attach mysql: %w", err)
 	}
-	defer db.Conn().Exec(fmt.Sprintf("DETACH %s", attachName))
+	defer func() { _, _ = db.Conn().Exec(fmt.Sprintf("DETACH %s", attachName)) }()
 
 	// If query is just a table name (no spaces), select from it directly
 	selectQuery := query
@@ -1158,7 +1143,7 @@ func ReadFromDB(duckDB *engine.DB, extDB *sql.DB, query string) (*DataFrame, err
 	if err != nil {
 		return nil, fmt.Errorf("duckframe: external query failed: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	colNames, err := rows.Columns()
 	if err != nil {
@@ -1187,7 +1172,7 @@ func ReadFromDB(duckDB *engine.DB, extDB *sql.DB, query string) (*DataFrame, err
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("duckframe: error reading external rows: %w", err)
 	}
-	rows.Close() // explicitly close before inserting
+	_ = rows.Close() // explicitly close before inserting (error already checked via rows.Err)
 
 	// Build CREATE TABLE with inferred types
 	tableName := nextTableName()
@@ -1212,14 +1197,14 @@ func ReadFromDB(duckDB *engine.DB, extDB *sql.DB, query string) (*DataFrame, err
 	// Insert all collected rows into DuckDB
 	for _, rowVals := range allRows {
 		if _, err := duckDB.Conn().Exec(insertSQL, rowVals...); err != nil {
-			duckDB.Conn().Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName))
+			_, _ = duckDB.Conn().Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName))
 			return nil, fmt.Errorf("duckframe: failed to insert external row: %w", err)
 		}
 	}
 
 	columns, err := queryColumns(duckDB.Conn(), tableName)
 	if err != nil {
-		duckDB.Conn().Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName))
+		_, _ = duckDB.Conn().Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName))
 		return nil, err
 	}
 

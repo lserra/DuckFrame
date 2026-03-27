@@ -22,7 +22,7 @@ func Open(path string) (*DB, error) {
 	}
 
 	if err := conn.Ping(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("duckframe: failed to ping duckdb: %w", err)
 	}
 
