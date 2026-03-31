@@ -269,6 +269,10 @@ See [ROADMAP.md](ROADMAP.md) for the detailed plan.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+If you prefer, you can also pay me a coffe, just click on the link below:
+
+<a href="https://buymeacoffee.com/cYXalAb" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/default-orange.png" alt="Buy Me A Coffee" height="41" width="174"></a>
+
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
