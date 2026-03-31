@@ -1,4 +1,4 @@
-.PHONY: build test lint clean vet fmt tidy coverage
+.PHONY: build test lint clean vet fmt tidy coverage bench
 
 # Default target
 all: fmt vet lint test build
@@ -37,3 +37,11 @@ tidy:
 clean:
 	go clean
 	rm -f coverage.out coverage.html
+
+# Run benchmarks (Go: DuckFrame vs Gota)
+bench:
+	CGO_ENABLED=1 go run ./cmd/bench
+
+# Run Python benchmarks (DuckDB, Pandas, Polars)
+bench-python:
+	python3 benchmarks/scripts/bench_all_python.py

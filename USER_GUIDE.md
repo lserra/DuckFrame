@@ -14,6 +14,7 @@
 6. [API Reference](#api-reference)
 7. [Exemplos](#exemplos)
 8. [Qualidade e Ferramentas](#qualidade-e-ferramentas)
+9. [Benchmarks](#benchmarks)
 
 ---
 
@@ -43,6 +44,12 @@ duckframe/
 │   └── engine/
 │       ├── engine.go         # Gerenciamento de conexão DuckDB
 │       └── engine_test.go    # Testes da engine
+├── cmd/
+│   └── bench/                # Benchmark DuckFrame vs Gota
+├── benchmarks/
+│   ├── scripts/              # Scripts Python de benchmark
+│   ├── data/                 # Dados gerados (gitignored)
+│   └── README.md             # Como reproduzir benchmarks
 ├── examples/                 # Exemplos executáveis
 │   ├── basic/                # Operações fundamentais
 │   ├── etl/                  # Pipeline CSV → Parquet
@@ -52,7 +59,7 @@ duckframe/
 ├── docs/
 │   └── API.md                # Referência completa da API
 ├── testdata/                 # Dados para testes
-├── Makefile                  # Comandos de build/test/lint
+├── Makefile                  # Comandos de build/test/lint/bench
 ├── .golangci.yml             # Configuração do linter
 ├── .github/workflows/ci.yml  # CI com GitHub Actions
 ├── LICENSE                   # MIT
@@ -803,6 +810,30 @@ O arquivo `example_test.go` contém exemplos que aparecem automaticamente na doc
 go doc github.com/lserra/duckframe
 go doc github.com/lserra/duckframe DataFrame.Filter
 ```
+
+---
+
+## Benchmarks
+
+DuckFrame é comparado com outras bibliotecas de DataFrames em Go e Python.
+
+### Rodar Benchmarks
+
+```bash
+# Go: DuckFrame vs Gota
+make bench
+
+# Python: DuckDB vs Pandas vs Polars
+make bench-python
+```
+
+### Gerar Dados de Benchmark
+
+```bash
+python3 benchmarks/scripts/generate_data.py
+```
+
+Veja os resultados completos no [README.md](README.md#benchmarks) e detalhes em [benchmarks/README.md](benchmarks/README.md).
 
 ---
 

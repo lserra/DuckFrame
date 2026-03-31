@@ -38,3 +38,4 @@ bin/
 # Coverage
 coverage.out
 coverage.html
+/bench

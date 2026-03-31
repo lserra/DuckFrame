@@ -96,11 +96,11 @@
 - [x] CONTRIBUTING.md
 
 ## Fase 10 — Benchmarks e Lançamento
-- [ ] Benchmark: DuckFrame vs Pandas (Python) em operações comuns
-- [ ] Benchmark: DuckFrame vs Polars (Rust/Python) em operações comuns
-- [ ] Benchmark: DuckFrame vs Gota (Go) em operações comuns
-- [ ] Publicar resultados no README
-- [ ] Release v0.1.0 — MVP público
+- [x] Benchmark: DuckFrame vs Pandas (Python) em operações comuns
+- [x] Benchmark: DuckFrame vs Polars (Rust/Python) em operações comuns
+- [x] Benchmark: DuckFrame vs Gota (Go) em operações comuns
+- [x] Publicar resultados no README
+- [x] Release v0.1.0 — MVP público
 - [ ] Post de lançamento (blog / Reddit / Hacker News / Twitter)
 - [ ] Criar Discord/Slack da comunidade
 
