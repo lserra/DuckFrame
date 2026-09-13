@@ -110,7 +110,7 @@ duckframe/
 ├── duckframe_test.go         # Unit tests
 ├── duckframe_bench_test.go   # Benchmarks
 ├── example_test.go           # Example tests (godoc)
-├── internal/engine/          # DuckDB connection management
+├── engine/                   # DuckDB connection management
 ├── examples/                 # Runnable example programs
 │   ├── basic/                # Core operations
 │   ├── etl/                  # CSV → Parquet pipeline

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/lserra/duckframe"
-	"github.com/lserra/duckframe/internal/engine"
+	"github.com/lserra/duckframe/engine"
 )
 
 func openTestDB(t *testing.T) *engine.DB {

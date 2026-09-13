@@ -14,7 +14,7 @@ import (
 	"os"
 
 	"github.com/lserra/duckframe"
-	"github.com/lserra/duckframe/internal/engine"
+	"github.com/lserra/duckframe/engine"
 )
 
 func main() {
