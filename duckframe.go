@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"text/tabwriter"
 
-	"github.com/lserra/duckframe/internal/engine"
+	"github.com/lserra/duckframe/engine"
 )
 
 // tableCounter generates unique table names for each DataFrame.

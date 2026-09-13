@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/lserra/duckframe"
-	"github.com/lserra/duckframe/internal/engine"
+	"github.com/lserra/duckframe/engine"
 )
 
 // BenchmarkSequentialFilter applies a filter to 5 DataFrames sequentially.

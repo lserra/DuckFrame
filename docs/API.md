@@ -203,7 +203,7 @@ Generic connector — reads from any `database/sql` compatible connection. Fetch
 ## Package `engine`
 
 ```go
-import "github.com/lserra/duckframe/internal/engine"
+import "github.com/lserra/duckframe/engine"
 ```
 
 ### `Open`
